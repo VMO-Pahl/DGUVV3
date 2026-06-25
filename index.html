@@ -137,6 +137,9 @@
   .step-title{ font-size:20px; font-weight:800; color:var(--gray); margin:6px 0 12px; }
   .step-info{ background:var(--soft); border:1px solid var(--line); border-radius:12px; padding:12px; font-size:14px; line-height:1.55; }
   .photo-prev{ display:block; max-width:100%; border-radius:12px; margin-top:10px; border:1px solid var(--line); }
+  .thumb{ width:84px; height:84px; object-fit:cover; border-radius:10px; border:1px solid var(--line); }
+  .cover-prev{ display:block; max-width:100%; border-radius:12px; margin-top:10px; border:1px solid var(--line); }
+  .dev-cover{ width:46px; height:46px; object-fit:cover; border-radius:10px; border:1px solid var(--line); flex-shrink:0; }
   .btn-ok{ background:#1c7a2e; color:#fff; flex:1; }
   .btn-no{ background:var(--red); color:#fff; flex:1; }
   .btn-skip{ background:#fff; color:var(--gray); border:1px solid var(--line); }
@@ -277,6 +280,10 @@
           203-070/-071, DIN VDE 0701-0702) und kann frei angepasst werden.
         </p>
         <button class="btn btn-primary" id="d-go">Gerät speichern</button>
+        <label style="margin-top:18px;">Titelbild (optional)</label>
+        <input type="file" id="d-cover-file" accept="image/*" capture="environment" class="hidden">
+        <button class="btn btn-outline" id="d-cover-btn" style="width:100%;">📷 Bild hinzufügen</button>
+        <div id="d-cover-prev"></div>
         <div class="msg" id="d-msg"></div>
       </div>
 
@@ -2948,6 +2955,7 @@ function renderDevices(){
 
     const head=document.createElement('div'); head.className='dev-head';
     head.innerHTML=
+      (d.cover ? '<img class="dev-cover" src="'+d.cover+'">' : '')+
       '<div class="grow"><div class="dev-title">'+escapeHtml(d.name||'(ohne Bezeichnung)')+'</div>'+
       '<div class="dev-sub">'+escapeHtml(d.inv||'—')+' · '+escapeHtml(d.location||'—')+'</div></div>'+
       '<span class="pill '+s.cls+'">'+s.label+'</span>';
@@ -2980,6 +2988,14 @@ function renderDevices(){
       '<div class="actions-row" style="margin:12px 0 6px;">'+
         '<button class="btn btn-primary btn-sm dev-exam">DGUV V3 prüfen</button>'+
         '<button class="btn btn-outline btn-sm dev-qr">QR-Code</button>'+
+      '</div>'+
+      '<div class="cover-box">'+
+        (d.cover ? '<img class="cover-prev" src="'+d.cover+'">' : '')+
+        '<input type="file" accept="image/*" capture="environment" class="cover-file hidden">'+
+        '<div class="actions-row" style="margin:8px 0;">'+
+          '<button class="btn btn-outline btn-sm cover-add">'+(d.cover?'Titelbild ändern':'Titelbild hinzufügen')+'</button>'+
+          (d.cover?'<button class="btn btn-danger btn-sm cover-remove">Titelbild entfernen</button>':'')+
+        '</div>'+
       '</div>'+
       '<div class="kv"><b>Art:</b> '+escapeHtml(d.type)+'</div>'+
       '<div class="kv"><b>Intervall:</b> '+d.intervalMonths+' Monate</div>'+
@@ -3021,6 +3037,27 @@ function renderDevices(){
     body.querySelector('.dev-exam').addEventListener('click', ()=> startExam(d.id));
     body.querySelector('.dev-qr').addEventListener('click', ()=> showQR(d));
 
+    const coverFile=body.querySelector('.cover-file');
+    body.querySelector('.cover-add').addEventListener('click', ()=> coverFile.click());
+    coverFile.addEventListener('change', async (e)=>{
+      const f=e.target.files[0]; if(!f) return;
+      try{
+        const data=await compressImage(f);
+        const all=loadDevices(); const t=all.find(x=>x.id===d.id); t.cover=data;
+        if(!saveDevicesChecked(all)){ alert('Speicher voll: Titelbild konnte nicht gespeichert werden. Bitte sichern und alte Fotos entfernen.'); return; }
+        addLog('Titelbild gesetzt', d.name+' ('+(d.inv||'—')+')');
+        renderDevices(); renderDashboard(); openDevice(d.id);
+      }catch(err){ alert('Bild konnte nicht verarbeitet werden.'); }
+    });
+    const coverRem=body.querySelector('.cover-remove');
+    if(coverRem) coverRem.addEventListener('click', ()=>{
+      if(!confirm('Titelbild entfernen?')) return;
+      const all=loadDevices(); const t=all.find(x=>x.id===d.id); t.cover=null;
+      saveDevicesChecked(all);
+      addLog('Titelbild entfernt', d.name+' ('+(d.inv||'—')+')');
+      renderDevices(); renderDashboard(); openDevice(d.id);
+    });
+
     if(isAdmin){
       body.querySelector('.t-del').addEventListener('click', ()=>{
         if(!confirm('Gerät "'+(d.name||d.inv)+'" inkl. Prüfhistorie löschen?')) return;
@@ -3043,6 +3080,15 @@ document.getElementById('d-presets').addEventListener('click', e=>{
   const b=e.target.closest('button[data-m]'); if(!b) return;
   document.getElementById('d-interval').value=b.dataset.m;
 });
+let newDeviceCover=null;
+document.getElementById('d-cover-btn').addEventListener('click', ()=> document.getElementById('d-cover-file').click());
+document.getElementById('d-cover-file').addEventListener('change', async (e)=>{
+  const f=e.target.files[0]; if(!f) return;
+  try{ newDeviceCover=await compressImage(f);
+    document.getElementById('d-cover-prev').innerHTML='<img class="cover-prev" src="'+newDeviceCover+'">';
+  }catch(err){ alert('Bild konnte nicht verarbeitet werden.'); }
+});
+
 document.getElementById('d-go').addEventListener('click', ()=>{
   const inv=document.getElementById('d-inv').value.trim();
   const name=document.getElementById('d-name').value.trim();
@@ -3053,11 +3099,12 @@ document.getElementById('d-go').addEventListener('click', ()=>{
   if(!name){ msg.style.color=''; msg.textContent='Bitte mindestens eine Bezeichnung angeben.'; return; }
   if(!interval || interval<1){ msg.style.color=''; msg.textContent='Bitte ein gültiges Intervall (Monate) angeben.'; return; }
   const all=loadDevices();
-  all.push({ id:uid(), inv, name, location:loc, type, intervalMonths:interval, created:new Date().toISOString(), tests:[] });
+  all.push({ id:uid(), inv, name, location:loc, type, intervalMonths:interval, cover:newDeviceCover, created:new Date().toISOString(), tests:[] });
   saveDevices(all);
   addLog('Gerät angelegt', name+' ('+(inv||'—')+') · Intervall '+interval+' Mon.');
   document.getElementById('d-inv').value=''; document.getElementById('d-name').value='';
   document.getElementById('d-loc').value='';
+  newDeviceCover=null; document.getElementById('d-cover-prev').innerHTML='';
   msg.style.color='#1c7a2e'; msg.textContent='Gerät "'+name+'" gespeichert.';
   renderDevices(); renderDashboard();
   setTimeout(()=>{ msg.textContent=''; msg.style.color=''; }, 1500);
