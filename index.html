@@ -248,7 +248,7 @@
     <div id="panel-devices" class="hidden">
       <div class="actions-row">
         <button class="btn btn-outline btn-sm" id="dev-toggle-form">+ Neues Gerät</button>
-        <button class="btn btn-outline btn-sm" id="dev-export">Übersicht als CSV</button>
+        <button class="btn btn-outline btn-sm" id="dev-export">Übersicht (Protokoll-CSV)</button>
         <button class="btn btn-outline btn-sm" id="dev-export-tests">Prüfungen als CSV</button>
       </div>
 
@@ -263,6 +263,8 @@
           <option value="BR">Büro (BR)</option>
           <option value="WK">Fertigung (WK)</option>
         </select>
+        <label>Kennung (automatisch)</label>
+        <input id="d-code" readonly style="background:var(--soft); font-weight:700; color:var(--gray);">
         <label>Lagerplatz</label>
         <select id="d-lager"></select>
         <label>Standort / Bemerkung (optional)</label>
@@ -3565,13 +3567,20 @@ function renderDevices(){
   });
 }
 
+/* Kennungs-Vorschau (BR-/WK-…) anhand der Bereichsauswahl */
+function updateCodePreview(){
+  const a=document.getElementById('d-area'), c=document.getElementById('d-code');
+  if(a && c) c.value=nextCode(a.value);
+}
+function refreshDeviceForm(){ fillLagerOptions(); updateCodePreview(); }
+
 /* Formular: Gerät anlegen */
 document.getElementById('dev-toggle-form').addEventListener('click', ()=>{
   const f=document.getElementById('dev-form');
   f.classList.toggle('hidden');
-  if(!f.classList.contains('hidden')) fillLagerOptions();
+  if(!f.classList.contains('hidden')) refreshDeviceForm();
 });
-document.getElementById('d-area').addEventListener('change', fillLagerOptions);
+document.getElementById('d-area').addEventListener('change', refreshDeviceForm);
 document.getElementById('d-presets').addEventListener('click', e=>{
   const b=e.target.closest('button[data-m]'); if(!b) return;
   document.getElementById('d-interval').value=b.dataset.m;
@@ -3606,29 +3615,39 @@ document.getElementById('d-go').addEventListener('click', ()=>{
   newDeviceCover=null; document.getElementById('d-cover-prev').innerHTML='';
   msg.style.color='#1c7a2e'; msg.textContent='Gerät "'+name+'" gespeichert (Kennung '+code+').';
   renderDevices(); renderDashboard();
+  updateCodePreview();
   setTimeout(()=>{ msg.textContent=''; msg.style.color=''; }, 2000);
 });
 
-/* Übersicht als CSV exportieren */
+/* Übersicht als CSV im Format des DGUV-V3-Protokolls (je Bereich ein Block) */
 document.getElementById('dev-export').addEventListener('click', ()=>{
   const devs=loadDevices();
-  let csv='Kennung;Bereich;Lagerplatz;Inventarnr;Bezeichnung;Bemerkung;Art;Intervall_Monate;LetztePruefung;NaechsteFaelligkeit;Status;LetzterPruefer;LetztesErgebnis\n';
-  devs.forEach(d=>{
-    const s=deviceStatus(d);
-    const tests=(d.tests||[]).map((t,i)=>({t,i}))
-      .sort((a,b)=> (new Date(b.t.date)-new Date(a.t.date)) || (b.i-a.i))
-      .map(o=>o.t);
-    const last=tests[0]||{};
-    const row=[ d.code||'', areaLabel(d.area), d.lager||'', d.inv||'', d.name||'', d.location||'', d.type||'', d.intervalMonths,
-      s.last?formatDay(s.last):'', s.due?formatDay(s.due):'', s.label,
-      last.inspector||'', last.result||'' ];
-    csv += row.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(';')+'\n';
-  });
-  const blob=new Blob([csv], {type:'text/csv;charset=utf-8;'});
-  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
-  a.download='dguvv3-geraete-'+new Date().toISOString().slice(0,10)+'.csv';
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  addLog('Geräteübersicht exportiert', devs.length+' Geräte');
+  const stand='Stand '+String(new Date().getMonth()+1).padStart(2,'0')+'.'+new Date().getFullYear();
+  function csvCell(v){ v=String(v==null?'':v); return /[";\n]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; }
+  function lastTestOf(d){
+    const ts=(d.tests||[]).map((t,i)=>({t,i}))
+      .sort((a,b)=> (new Date(b.t.date)-new Date(a.t.date)) || (b.i-a.i)).map(o=>o.t);
+    return ts[0]||null;
+  }
+  function block(list, titleLabel){
+    let out='Elektronische Geräte Übersicht (DGUV V3) - '+titleLabel+' – '+stand+'\n';
+    out+='Nummer;Gerät;letzte Prüfung;nächste Prüfung;Bemerkung\n';
+    list.sort((a,b)=> String(a.code||a.inv||'').localeCompare(String(b.code||b.inv||''),'de',{numeric:true}));
+    list.forEach(d=>{
+      const s=deviceStatus(d); const lt=lastTestOf(d);
+      const bem = (lt&&lt.note) ? lt.note : (lt&&lt.inspector ? lt.inspector : (d.location||''));
+      const row=[ d.code||d.inv||'', d.name||'', s.last?formatDay(s.last):'', s.due?formatDay(s.due):'', bem ];
+      out+=row.map(csvCell).join(';')+'\n';
+    });
+    return out;
+  }
+  let csv='\uFEFF';
+  csv+=block(devs.filter(d=>d.area==='WK'), 'Fertigung')+'\n';
+  csv+=block(devs.filter(d=>d.area==='BR'), 'Büro');
+  const legacy=devs.filter(d=>d.area!=='WK' && d.area!=='BR');
+  if(legacy.length) csv+='\n'+block(legacy, 'Sonstige');
+  downloadFile('DGUVV3-Protokoll-'+new Date().toISOString().slice(0,10)+'.csv', csv, 'text/csv');
+  addLog('Protokoll-CSV exportiert', devs.length+' Geräte');
 });
 
 /* Allgemeiner Datei-Download */
