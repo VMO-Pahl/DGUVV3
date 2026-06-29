@@ -214,6 +214,7 @@
     <span class="name">DGUVV3-tool</span>
     <span class="spacer"></span>
     <span class="who" id="who"></span>
+    <button class="btn btn-outline btn-sm admin-only" id="btn-settings" title="Einstellungen">⚙</button>
     <button class="btn btn-outline btn-sm" id="btn-pw">Passwort</button>
     <button class="btn btn-outline btn-sm" id="btn-logout">Abmelden</button>
   </div>
@@ -228,8 +229,6 @@
     <div class="tabs" id="tabs">
       <div class="tab active" data-panel="dashboard">Start</div>
       <div class="tab" data-panel="devices">Geräte</div>
-      <div class="tab admin-only" data-panel="users">Benutzer</div>
-      <div class="tab admin-only" data-panel="log">Protokoll</div>
     </div>
 
     <!-- Start -->
@@ -259,7 +258,14 @@
         <input id="d-inv" autocapitalize="characters" autocomplete="off">
         <label>Bezeichnung</label>
         <input id="d-name" autocomplete="off">
-        <label>Standort / Bereich</label>
+        <label>Bereich</label>
+        <select id="d-area">
+          <option value="BR">Büro (BR)</option>
+          <option value="WK">Fertigung (WK)</option>
+        </select>
+        <label>Lagerplatz</label>
+        <select id="d-lager"></select>
+        <label>Standort / Bemerkung (optional)</label>
         <input id="d-loc" autocomplete="off">
         <label>Art</label>
         <select id="d-type">
@@ -327,7 +333,7 @@
         </table>
       </div>
 
-      <div class="card" style="margin-top:14px;">
+      <div class="card" id="backup-card" style="margin-top:14px;">
         <p style="margin:0 0 4px; font-weight:700;">Datensicherung</p>
         <p class="muted" style="margin:0 0 10px;">
           Die Daten liegen nur lokal auf diesem Gerät. Sichere sie regelmäßig
@@ -354,6 +360,22 @@
 <div id="exam-modal" class="modal hidden"></div>
 <div id="qr-modal" class="modal hidden"></div>
 <div id="sig-modal" class="modal hidden"></div>
+<div id="settings-modal" class="modal hidden">
+  <div class="modal-head"><b>Einstellungen</b><span style="flex:1"></span>
+    <button class="btn btn-outline btn-sm" id="settings-close">Schließen</button></div>
+  <div class="modal-body">
+    <div class="tabs" id="settings-tabs">
+      <div class="tab active" data-spanel="data">Daten</div>
+      <div class="tab" data-spanel="users">Benutzer</div>
+      <div class="tab" data-spanel="log">Protokoll</div>
+      <div class="tab" data-spanel="settings">Einstellungen</div>
+    </div>
+    <div id="spanel-data"></div>
+    <div id="spanel-users" class="hidden"></div>
+    <div id="spanel-log" class="hidden"></div>
+    <div id="spanel-settings" class="hidden"></div>
+  </div>
+</div>
 
 <script id="pdflib">/** @license
  *
@@ -3033,7 +3055,9 @@ const mem = {}; let persistent = true;
 function rawGet(k){ try{ return localStorage.getItem(k); }catch(e){ persistent=false; return (k in mem)?mem[k]:null; } }
 function rawSet(k,v){ try{ localStorage.setItem(k,v); }catch(e){ persistent=false; mem[k]=v; } }
 
-const USERS_KEY='dguv_users', LOG_KEY='dguv_log', DEVICES_KEY='dguv_devices';
+const USERS_KEY='dguv_users', LOG_KEY='dguv_log', DEVICES_KEY='dguv_devices', LISTS_KEY='dguv_lists';
+function loadLists(){ const r=rawGet(LISTS_KEY); try{ const o=r?JSON.parse(r):null; if(o&&o.lager) return o; }catch(e){} return {lager:{BR:[],WK:[]}}; }
+function saveLists(l){ rawSet(LISTS_KEY, JSON.stringify(l)); }
 function loadUsers(){ const r=rawGet(USERS_KEY); try{ return r?JSON.parse(r):[]; }catch(e){ return []; } }
 function saveUsers(u){ rawSet(USERS_KEY, JSON.stringify(u)); }
 function loadLog(){ const r=rawGet(LOG_KEY); try{ return r?JSON.parse(r):[]; }catch(e){ return []; } }
@@ -3128,23 +3152,49 @@ function openApp(){
   switchPanel('dashboard');
   renderDashboard();
   renderDevices();
-  if(isAdmin){ renderUsers(); renderLog(); }
+  if(isAdmin){ renderUsers(); renderLog(); renderDataPanel(); }
   show('view-main');
   if(pendingDeviceId){ const id=pendingDeviceId; pendingDeviceId=null; setTimeout(()=>openDevice(id), 60); }
 }
 
-/* ===================== Tabs ===================== */
+/* ===================== Tabs (Hauptansicht) ===================== */
 function switchPanel(name){
-  document.querySelectorAll('.tab').forEach(t=> t.classList.toggle('active', t.dataset.panel===name));
-  ['dashboard','devices','users','log'].forEach(p=>{
+  document.querySelectorAll('#tabs .tab').forEach(t=> t.classList.toggle('active', t.dataset.panel===name));
+  ['dashboard','devices'].forEach(p=>{
     document.getElementById('panel-'+p).classList.toggle('hidden', p!==name);
   });
 }
 document.getElementById('tabs').addEventListener('click', e=>{
   const tab=e.target.closest('.tab'); if(!tab) return;
-  if(tab.classList.contains('admin-only') && currentUser.role!=='admin') return;
   switchPanel(tab.dataset.panel);
 });
+
+/* ===================== Einstellungs-Modal (Zahnrad) ===================== */
+function switchSettings(name){
+  document.querySelectorAll('#settings-tabs .tab').forEach(t=> t.classList.toggle('active', t.dataset.spanel===name));
+  ['data','users','log','settings'].forEach(p=>{
+    const el=document.getElementById('spanel-'+p); if(el) el.classList.toggle('hidden', p!==name);
+  });
+}
+document.getElementById('settings-tabs').addEventListener('click', e=>{
+  const tab=e.target.closest('.tab'); if(!tab) return; switchSettings(tab.dataset.spanel);
+});
+document.getElementById('settings-close').addEventListener('click', ()=> document.getElementById('settings-modal').classList.add('hidden'));
+document.getElementById('btn-settings').addEventListener('click', ()=>{
+  renderUsers(); renderLog(); renderDataPanel();
+  switchSettings('data');
+  document.getElementById('settings-modal').classList.remove('hidden');
+});
+
+/* Panels einmalig ins Einstellungs-Modal verschieben */
+(function relocatePanels(){
+  const u=document.getElementById('panel-users');
+  const l=document.getElementById('panel-log');
+  const b=document.getElementById('backup-card');
+  if(u){ u.classList.remove('hidden'); document.getElementById('spanel-users').appendChild(u); }
+  if(l){ l.classList.remove('hidden'); document.getElementById('spanel-log').appendChild(l); }
+  if(b){ document.getElementById('spanel-settings').appendChild(b); }
+})();
 
 /* ===================== Logout / eigenes Passwort ===================== */
 document.getElementById('btn-logout').addEventListener('click', ()=>{
@@ -3279,6 +3329,66 @@ function startOfToday(){ const d=new Date(); d.setHours(0,0,0,0); return d; }
 function formatDay(d){ const x=new Date(d); if(isNaN(x)) return '—';
   const p=n=>String(n).padStart(2,'0'); return p(x.getDate())+'.'+p(x.getMonth()+1)+'.'+x.getFullYear(); }
 
+function areaLabel(a){ return a==='BR'?'Büro':(a==='WK'?'Fertigung':''); }
+
+/* Laufende Kennung je Bereich: BR-001, WK-001 ... */
+function nextCode(area){
+  let max=0;
+  loadDevices().forEach(d=>{
+    if(d.code){ const m=String(d.code).match(new RegExp('^'+area+'-(\\d+)$'));
+      if(m){ const n=parseInt(m[1],10); if(n>max) max=n; } }
+  });
+  return area+'-'+String(max+1).padStart(3,'0');
+}
+
+/* Lagerplatz-Dropdown im Formular füllen (abhängig vom Bereich) */
+function fillLagerOptions(){
+  const areaEl=document.getElementById('d-area'); const sel=document.getElementById('d-lager');
+  if(!areaEl || !sel) return;
+  const arr=(loadLists().lager[areaEl.value])||[];
+  sel.innerHTML='';
+  if(!arr.length){ const o=document.createElement('option'); o.value=''; o.textContent='(keine – im Zahnrad → Daten anlegen)'; sel.appendChild(o); }
+  else arr.forEach(v=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; sel.appendChild(o); });
+}
+
+/* Daten-Reiter: Lagerplatz-Listen je Bereich verwalten */
+function renderDataPanel(){
+  const el=document.getElementById('spanel-data'); if(!el) return;
+  const lists=loadLists();
+  function section(area){
+    const arr=lists.lager[area]||[];
+    const items = arr.length
+      ? arr.map((v,i)=>'<div class="row"><div class="grow">'+escapeHtml(v)+'</div>'+
+          '<button class="btn btn-danger btn-sm" data-del="'+area+'|'+i+'">Löschen</button></div>').join('')
+      : '<p class="muted">Noch keine Einträge.</p>';
+    return '<div class="card" style="margin-bottom:14px;">'+
+      '<p style="font-weight:700;margin:0 0 8px;">Lagerplätze '+areaLabel(area)+' ('+area+')</p>'+ items+
+      '<div class="actions-row" style="margin-top:10px;">'+
+        '<input class="lp-input" data-area="'+area+'" placeholder="Neuer Lagerplatz" style="flex:1;">'+
+        '<button class="btn btn-primary btn-sm" data-add="'+area+'">Hinzufügen</button>'+
+      '</div></div>';
+  }
+  el.innerHTML='<p class="muted" style="margin:0 0 12px;">Lagerplatz-Listen je Bereich. Sie erscheinen im Geräteformular als Auswahl.</p>'+
+    section('BR')+section('WK');
+  el.querySelectorAll('[data-add]').forEach(b=> b.onclick=()=>{
+    const area=b.getAttribute('data-add');
+    const inp=el.querySelector('.lp-input[data-area="'+area+'"]');
+    const v=inp.value.trim(); if(!v) return;
+    const L=loadLists(); L.lager[area]=L.lager[area]||[];
+    if(L.lager[area].some(x=>x.toLowerCase()===v.toLowerCase())){ alert('Eintrag existiert bereits.'); return; }
+    L.lager[area].push(v); saveLists(L);
+    addLog('Lagerplatz hinzugefügt', area+': '+v);
+    renderDataPanel();
+  });
+  el.querySelectorAll('[data-del]').forEach(b=> b.onclick=()=>{
+    const parts=b.getAttribute('data-del').split('|'); const area=parts[0], idx=parseInt(parts[1],10);
+    if(!confirm('Lagerplatz löschen?')) return;
+    const L=loadLists(); const removed=(L.lager[area]||[]).splice(idx,1); saveLists(L);
+    addLog('Lagerplatz gelöscht', area+': '+(removed[0]||''));
+    renderDataPanel();
+  });
+}
+
 /* Fristenberechnung + Status für ein Gerät */
 function deviceStatus(dev){
   const tests = dev.tests || [];
@@ -3337,7 +3447,10 @@ function renderDevices(){
     head.innerHTML=
       (d.cover ? '<img class="dev-cover" src="'+d.cover+'">' : '')+
       '<div class="grow"><div class="dev-title">'+escapeHtml(d.name||'(ohne Bezeichnung)')+'</div>'+
-      '<div class="dev-sub">'+escapeHtml(d.inv||'—')+' · '+escapeHtml(d.location||'—')+'</div></div>'+
+      '<div class="dev-sub">'+escapeHtml(d.code||d.inv||'—')+
+        (areaLabel(d.area)?(' · '+escapeHtml(areaLabel(d.area))):'')+
+        (d.lager?(' · '+escapeHtml(d.lager)):(d.location?(' · '+escapeHtml(d.location)):''))+
+      '</div></div>'+
       '<span class="pill '+s.cls+'">'+s.label+'</span>';
     card.appendChild(head);
 
@@ -3359,6 +3472,11 @@ function renderDevices(){
           (d.cover?'<button class="btn btn-danger btn-sm cover-remove">Titelbild entfernen</button>':'')+
         '</div>'+
       '</div>'+
+      '<div class="kv"><b>Kennung:</b> '+escapeHtml(d.code||'—')+'</div>'+
+      '<div class="kv"><b>Bereich:</b> '+(areaLabel(d.area)?escapeHtml(areaLabel(d.area)+' ('+d.area+')'):'—')+'</div>'+
+      '<div class="kv"><b>Lagerplatz:</b> '+escapeHtml(d.lager||'—')+'</div>'+
+      '<div class="kv"><b>Inventar-/Kennnummer:</b> '+escapeHtml(d.inv||'—')+'</div>'+
+      (d.location?('<div class="kv"><b>Bemerkung:</b> '+escapeHtml(d.location)+'</div>'):'')+
       '<div class="kv"><b>Art:</b> '+escapeHtml(d.type)+'</div>'+
       '<div class="kv"><b>Intervall:</b> '+d.intervalMonths+' Monate</div>'+
       '<div class="kv"><b>Letzte Prüfung:</b> '+(s.last?formatDay(s.last):'—')+'</div>'+
@@ -3449,8 +3567,11 @@ function renderDevices(){
 
 /* Formular: Gerät anlegen */
 document.getElementById('dev-toggle-form').addEventListener('click', ()=>{
-  document.getElementById('dev-form').classList.toggle('hidden');
+  const f=document.getElementById('dev-form');
+  f.classList.toggle('hidden');
+  if(!f.classList.contains('hidden')) fillLagerOptions();
 });
+document.getElementById('d-area').addEventListener('change', fillLagerOptions);
 document.getElementById('d-presets').addEventListener('click', e=>{
   const b=e.target.closest('button[data-m]'); if(!b) return;
   document.getElementById('d-interval').value=b.dataset.m;
@@ -3467,35 +3588,38 @@ document.getElementById('d-cover-file').addEventListener('change', async (e)=>{
 document.getElementById('d-go').addEventListener('click', ()=>{
   const inv=document.getElementById('d-inv').value.trim();
   const name=document.getElementById('d-name').value.trim();
+  const area=document.getElementById('d-area').value;
+  const lager=document.getElementById('d-lager').value;
   const loc=document.getElementById('d-loc').value.trim();
   const type=document.getElementById('d-type').value;
   const interval=parseInt(document.getElementById('d-interval').value,10);
   const msg=document.getElementById('d-msg');
   if(!name){ msg.style.color=''; msg.textContent='Bitte mindestens eine Bezeichnung angeben.'; return; }
   if(!interval || interval<1){ msg.style.color=''; msg.textContent='Bitte ein gültiges Intervall (Monate) angeben.'; return; }
+  const code=nextCode(area);
   const all=loadDevices();
-  all.push({ id:uid(), inv, name, location:loc, type, intervalMonths:interval, cover:newDeviceCover, created:new Date().toISOString(), tests:[] });
+  all.push({ id:uid(), code, area, lager, inv, name, location:loc, type, intervalMonths:interval, cover:newDeviceCover, created:new Date().toISOString(), tests:[] });
   saveDevices(all);
-  addLog('Gerät angelegt', name+' ('+(inv||'—')+') · Intervall '+interval+' Mon.');
+  addLog('Gerät angelegt', code+' · '+name+(inv?(' ('+inv+')'):'')+' · '+areaLabel(area)+(lager?(' / '+lager):'')+' · Intervall '+interval+' Mon.');
   document.getElementById('d-inv').value=''; document.getElementById('d-name').value='';
   document.getElementById('d-loc').value='';
   newDeviceCover=null; document.getElementById('d-cover-prev').innerHTML='';
-  msg.style.color='#1c7a2e'; msg.textContent='Gerät "'+name+'" gespeichert.';
+  msg.style.color='#1c7a2e'; msg.textContent='Gerät "'+name+'" gespeichert (Kennung '+code+').';
   renderDevices(); renderDashboard();
-  setTimeout(()=>{ msg.textContent=''; msg.style.color=''; }, 1500);
+  setTimeout(()=>{ msg.textContent=''; msg.style.color=''; }, 2000);
 });
 
 /* Übersicht als CSV exportieren */
 document.getElementById('dev-export').addEventListener('click', ()=>{
   const devs=loadDevices();
-  let csv='Inventarnr;Bezeichnung;Standort;Art;Intervall_Monate;LetztePruefung;NaechsteFaelligkeit;Status;LetzterPruefer;LetztesErgebnis\n';
+  let csv='Kennung;Bereich;Lagerplatz;Inventarnr;Bezeichnung;Bemerkung;Art;Intervall_Monate;LetztePruefung;NaechsteFaelligkeit;Status;LetzterPruefer;LetztesErgebnis\n';
   devs.forEach(d=>{
     const s=deviceStatus(d);
     const tests=(d.tests||[]).map((t,i)=>({t,i}))
       .sort((a,b)=> (new Date(b.t.date)-new Date(a.t.date)) || (b.i-a.i))
       .map(o=>o.t);
     const last=tests[0]||{};
-    const row=[ d.inv||'', d.name||'', d.location||'', d.type||'', d.intervalMonths,
+    const row=[ d.code||'', areaLabel(d.area), d.lager||'', d.inv||'', d.name||'', d.location||'', d.type||'', d.intervalMonths,
       s.last?formatDay(s.last):'', s.due?formatDay(s.due):'', s.label,
       last.inspector||'', last.result||'' ];
     csv += row.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(';')+'\n';
@@ -3517,10 +3641,10 @@ function downloadFile(name, text, mime){
 /* Vollständige Prüfhistorie als CSV (eine Zeile je Prüfung) */
 document.getElementById('dev-export-tests').addEventListener('click', ()=>{
   const devs=loadDevices();
-  let csv='Inventarnr;Bezeichnung;Standort;Art;Pruefdatum;Pruefer;Ergebnis;Bemerkung\n';
+  let csv='Kennung;Bereich;Lagerplatz;Inventarnr;Bezeichnung;Art;Pruefdatum;Pruefer;Ergebnis;Bemerkung\n';
   devs.forEach(d=>{
     (d.tests||[]).forEach(t=>{
-      const row=[d.inv||'', d.name||'', d.location||'', d.type||'', t.date||'', t.inspector||'', t.result||'', t.note||''];
+      const row=[d.code||'', areaLabel(d.area), d.lager||'', d.inv||'', d.name||'', d.type||'', t.date||'', t.inspector||'', t.result||'', t.note||''];
       csv += row.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(';')+'\n';
     });
   });
@@ -3530,8 +3654,8 @@ document.getElementById('dev-export-tests').addEventListener('click', ()=>{
 
 /* Komplettsicherung als JSON */
 document.getElementById('backup-export').addEventListener('click', ()=>{
-  const data={ app:'DGUVV3-tool', version:1, exported:new Date().toISOString(),
-               users:loadUsers(), devices:loadDevices(), log:loadLog() };
+  const data={ app:'DGUVV3-tool', version:2, exported:new Date().toISOString(),
+               users:loadUsers(), devices:loadDevices(), log:loadLog(), lists:loadLists() };
   downloadFile('dguvv3-sicherung-'+new Date().toISOString().slice(0,10)+'.json',
                JSON.stringify(data,null,2), 'application/json');
   addLog('Komplettsicherung erstellt', data.users.length+' Benutzer, '+data.devices.length+' Geräte');
@@ -3555,11 +3679,12 @@ document.getElementById('restore-file').addEventListener('change', e=>{
       e.target.value=''; return;
     }
     saveUsers(data.users); saveDevices(data.devices); saveLog(data.log);
+    if(data.lists && data.lists.lager) saveLists(data.lists);
     addLog('Sicherung wiederhergestellt', (data.exported||'unbekannt')+' · '+data.users.length+' Benutzer, '+data.devices.length+' Geräte');
     e.target.value='';
     const stillThere = data.users.some(u=>u.username===currentUser.username);
     if(stillThere){
-      renderUsers(); renderLog(); renderDevices(); renderDashboard();
+      renderUsers(); renderLog(); renderDevices(); renderDashboard(); renderDataPanel();
       alert('Sicherung wiederhergestellt.');
     } else {
       alert('Sicherung wiederhergestellt. Dein bisheriges Konto ist darin nicht enthalten – bitte neu anmelden.');
@@ -3791,7 +3916,7 @@ function showQR(dev){
       '<button class="btn btn-outline btn-sm" id="qr-close">Schließen</button></div>'+
     '<div class="modal-body"><div class="qr-wrap" id="qr-area">'+
       '<div style="font-weight:800; font-size:18px;">'+escapeHtml(dev.name||'')+'</div>'+
-      '<div class="muted" style="margin-bottom:10px;">'+escapeHtml(dev.inv||'')+'</div>'+
+      '<div class="muted" style="margin-bottom:10px;">'+escapeHtml((dev.code||dev.inv||'')+(dev.lager?(' · '+dev.lager):''))+'</div>'+
       svg+
       '<p class="muted" style="margin-top:10px;">Mit der iPhone-/iPad-Kamera scannen, um direkt zu diesem Gerät zu gelangen.</p>'+
     '</div></div>';
@@ -3950,8 +4075,11 @@ async function generatePdf(d, t){
   line('DGUV V3 – Prüfbericht', 16, true, 8);
   hr();
   line('Gerät: '+(d.name||''), 11, true);
+  line('Kennung: '+(d.code||'—'));
+  line('Bereich: '+(areaLabel(d.area)?(areaLabel(d.area)+' ('+d.area+')'):'—'));
+  line('Lagerplatz: '+(d.lager||'—'));
   line('Inventar-/Kennnummer: '+(d.inv||'—'));
-  line('Standort: '+(d.location||'—'));
+  if(d.location) line('Bemerkung: '+d.location);
   line('Art: '+(d.type||'—'));
   line('Prüfintervall: '+d.intervalMonths+' Monate');
   y+=2; hr();
