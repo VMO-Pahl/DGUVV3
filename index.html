@@ -249,7 +249,9 @@
       <div class="actions-row">
         <button class="btn btn-outline btn-sm" id="dev-toggle-form">+ Neues Gerät</button>
         <button class="btn btn-outline btn-sm" id="dev-export">Übersicht (Excel-Protokoll)</button>
+        <button class="btn btn-outline btn-sm admin-only" id="dev-import">Excel importieren</button>
         <button class="btn btn-outline btn-sm" id="dev-export-tests">Prüfungen als CSV</button>
+        <input type="file" id="import-file" class="hidden">
       </div>
 
       <div class="card hidden" id="dev-form" style="margin-bottom:14px;">
@@ -362,6 +364,7 @@
 <div id="exam-modal" class="modal hidden"></div>
 <div id="qr-modal" class="modal hidden"></div>
 <div id="sig-modal" class="modal hidden"></div>
+<div id="import-modal" class="modal hidden"></div>
 <div id="settings-modal" class="modal hidden">
   <div class="modal-head"><b>Einstellungen</b><span style="flex:1"></span>
     <button class="btn btn-outline btn-sm" id="settings-close">Schließen</button></div>
@@ -3737,6 +3740,149 @@ document.getElementById('dev-export').addEventListener('click', async ()=>{
   }catch(err){
     alert('Export fehlgeschlagen: '+err.message);
   }
+});
+
+/* ===================== Excel-Protokoll importieren ===================== */
+function cellText(v){
+  if(v==null) return '';
+  if(typeof v==='string') return v.trim();
+  if(typeof v==='number') return String(v);
+  if(v instanceof Date) return v.toISOString().slice(0,10);
+  if(v.richText) return v.richText.map(x=>x.text).join('').trim();
+  if(v.text!=null) return String(v.text).trim();
+  if(v.result!=null) return String(v.result).trim();
+  return String(v).trim();
+}
+function cellDate(v){
+  if(!v) return null;
+  if(v instanceof Date) return v;
+  if(typeof v==='object' && v.result instanceof Date) return v.result;
+  const d=new Date(v); return isNaN(d)?null:d;
+}
+function toISODate(d){ return d.toISOString().slice(0,10); }
+function monthsBetween(a,b){ let m=(b.getUTCFullYear()-a.getUTCFullYear())*12+(b.getUTCMonth()-a.getUTCMonth()); return m<1?1:m; }
+
+async function parseImportRows(file){
+  if(!window.ExcelJS){ alert('Excel-Bibliothek ist nicht geladen. Bitte die aktuelle Version der App laden bzw. die Seite neu laden.'); return null; }
+  const wb=new ExcelJS.Workbook();
+  await wb.xlsx.load(await file.arrayBuffer());
+  const rows=[];
+  wb.worksheets.forEach(ws=>{
+    ws.eachRow({includeEmpty:false},(row)=>{
+      const code=cellText(row.getCell(1).value);
+      const m=code.match(/^(WK|BR)-\d+$/i);
+      if(!m) return;                        // Bereich direkt aus der Nummer
+      const prefix=m[1].toUpperCase();
+      const name=cellText(row.getCell(2).value);
+      const letzte=cellDate(row.getCell(3).value);
+      const naechste=cellDate(row.getCell(4).value);
+      const bem=cellText(row.getCell(5).value);
+      if(!name && !letzte && !naechste && !bem) return;
+      rows.push({prefix, code:code.toUpperCase(), name, letzte, naechste, bem});
+    });
+  });
+  return rows;
+}
+
+/* Zusammenführen – apply=false simuliert (Vorschau), apply=true schreibt */
+function mergeRows(rows, apply){
+  const devs = apply ? loadDevices() : JSON.parse(JSON.stringify(loadDevices()));
+  const byCode={}; devs.forEach(d=>{ if(d.code) byCode[d.code]=d; });
+  const items=[]; let created=0, updated=0, tests=0;
+  rows.forEach(r=>{
+    let d=byCode[r.code], action;
+    if(!d){
+      d={ id:uid(), code:r.code, area:r.prefix, lager:'', inv:'', name:r.name||'', location:'',
+          type:'ortsveränderlich', intervalMonths:12, cover:null, created:new Date().toISOString(), tests:[] };
+      devs.push(d); byCode[r.code]=d; created++; action='neu';
+    } else {
+      if(r.name && r.name!==d.name){ d.name=r.name; }
+      updated++; action='aktualisieren';
+    }
+    if(r.letzte && r.naechste) d.intervalMonths=monthsBetween(r.letzte, r.naechste);
+    let td=r.letzte;
+    if(!td && r.naechste){
+      td=new Date(Date.UTC(r.naechste.getUTCFullYear(), r.naechste.getUTCMonth()-(d.intervalMonths||12), r.naechste.getUTCDate()));
+    }
+    let addsTest=false;
+    if(td){
+      const iso=toISODate(td); d.tests=d.tests||[];
+      if(!d.tests.some(t=>t.date===iso)){
+        d.tests.push({ tid:uid(), date:iso, inspector:r.bem||'Import', result:'bestanden', note:'Import aus Excel'+(r.bem?(' · '+r.bem):'') });
+        tests++; addsTest=true;
+      }
+    }
+    items.push({ code:r.code, name:d.name||'', letzte:r.letzte?toISODate(r.letzte):'', naechste:r.naechste?toISODate(r.naechste):'', action, addsTest });
+  });
+  if(apply){
+    if(!saveDevicesChecked(devs)) return {error:true};
+    addLog('Excel-Protokoll importiert', 'neu: '+created+', aktualisiert: '+updated+', Prüfungen: '+tests);
+    renderDevices(); renderDashboard();
+  }
+  return {items, created, updated, tests};
+}
+
+/* Vorschau-Modal */
+function showImportPreview(rows){
+  const plan=mergeRows(rows, false);
+  const m=document.getElementById('import-modal');
+  let body='';
+  if(!plan.items.length){
+    body='<p class="muted">Keine passenden Zeilen (mit Nummer WK-… / BR-…) gefunden.</p>';
+  } else {
+    let trs='';
+    plan.items.forEach(it=>{
+      const badge = it.action==='neu'
+        ? '<span class="pill open">neu</span>'
+        : '<span class="pill ok">aktualisieren</span>';
+      trs+='<tr><td>'+escapeHtml(it.code)+'</td><td>'+escapeHtml(it.name)+'</td>'+
+           '<td>'+(it.letzte?formatDay(it.letzte):'—')+'</td>'+
+           '<td>'+(it.naechste?formatDay(it.naechste):'—')+'</td>'+
+           '<td>'+badge+'</td>'+
+           '<td>'+(it.addsTest?'+ Prüfung':'—')+'</td></tr>';
+    });
+    body='<div class="stats" style="margin-bottom:12px;">'+
+        '<div class="stat"><div class="num">'+plan.items.length+'</div><div class="lbl">Zeilen</div></div>'+
+        '<div class="stat ok"><div class="num">'+plan.created+'</div><div class="lbl">neu</div></div>'+
+        '<div class="stat"><div class="num">'+plan.updated+'</div><div class="lbl">aktualisiert</div></div>'+
+        '<div class="stat soon"><div class="num">'+plan.tests+'</div><div class="lbl">Prüfungen</div></div>'+
+      '</div>'+
+      '<div class="card" style="overflow-x:auto;"><table class="logtable">'+
+        '<thead><tr><th>Nummer</th><th>Gerät</th><th>letzte</th><th>nächste</th><th>Aktion</th><th>Prüfung</th></tr></thead>'+
+        '<tbody>'+trs+'</tbody></table></div>';
+  }
+  m.innerHTML=
+    '<div class="modal-head"><b>Import-Vorschau</b><span style="flex:1"></span>'+
+      '<button class="btn btn-outline btn-sm" id="imp-cancel">Abbrechen</button></div>'+
+    '<div class="modal-body">'+body+
+      '<p class="disc">Es werden nur Zeilen mit Inhalt berücksichtigt. Vorhandene Nummern werden aktualisiert (keine Doppelung), fehlende neu angelegt. Fristen werden übernommen. Mach vorher ggf. eine Datensicherung.</p>'+
+    '</div>'+
+    '<div class="modal-foot">'+
+      '<button class="btn btn-outline" id="imp-close">Schließen</button>'+
+      (plan.items.length?'<button class="btn btn-primary" id="imp-apply" style="flex:1;">Import durchführen</button>':'')+
+    '</div>';
+  m.classList.remove('hidden');
+  const close=()=> m.classList.add('hidden');
+  document.getElementById('imp-cancel').onclick=close;
+  document.getElementById('imp-close').onclick=close;
+  const apply=document.getElementById('imp-apply');
+  if(apply) apply.onclick=()=>{
+    const res=mergeRows(rows, true);
+    close();
+    if(res.error){ alert('Speicher voll: Import konnte nicht gespeichert werden.'); return; }
+    alert('Import abgeschlossen.\nNeu angelegt: '+res.created+'\nAktualisiert: '+res.updated+'\nÜbernommene Prüfungen: '+res.tests);
+  };
+}
+
+document.getElementById('dev-import').addEventListener('click', ()=> document.getElementById('import-file').click());
+document.getElementById('import-file').addEventListener('change', async (e)=>{
+  const f=e.target.files[0]; if(!f) return;
+  try{
+    const rows=await parseImportRows(f);
+    if(rows===null){ e.target.value=''; return; }
+    showImportPreview(rows);
+  }catch(err){ alert('Datei konnte nicht gelesen werden: '+(err&&err.message?err.message:err)); }
+  e.target.value='';
 });
 
 /* Allgemeiner Datei-Download */
