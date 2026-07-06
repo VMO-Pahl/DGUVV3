@@ -3419,6 +3419,11 @@ function renderDataPanel(){
       '</div></div>';
   }
   el.innerHTML='<p class="muted" style="margin:0 0 12px;">Lagerplatz-Listen je Bereich. Sie erscheinen im Geräteformular als Auswahl.</p>'+
+    '<div class="actions-row" style="margin-bottom:14px;">'+
+      '<button class="btn btn-outline btn-sm" id="lp-export">Lagerplätze exportieren</button>'+
+      '<button class="btn btn-outline btn-sm" id="lp-import-btn">Lagerplätze einlesen</button>'+
+      '<input type="file" id="lp-import-file" class="hidden">'+
+    '</div>'+
     section('BR')+section('WK');
   el.querySelectorAll('[data-add]').forEach(b=> b.onclick=()=>{
     const area=b.getAttribute('data-add');
@@ -3437,6 +3442,39 @@ function renderDataPanel(){
     addLog('Lagerplatz gelöscht', area+': '+(removed[0]||''));
     renderDataPanel();
   });
+
+  // Nur die Lagerplätze exportieren (kleine JSON-Datei)
+  el.querySelector('#lp-export').onclick=()=>{
+    const data={ app:'DGUVV3-tool', type:'lagerplaetze', version:1, exported:new Date().toISOString(), lists:loadLists() };
+    downloadFile('DGUVV3-Lagerplaetze-'+new Date().toISOString().slice(0,10)+'.json', JSON.stringify(data,null,2), 'application/json');
+    addLog('Lagerplätze exportiert','');
+  };
+  // Lagerplätze einlesen und zusammenführen (vorhandene bleiben, neue kommen dazu)
+  el.querySelector('#lp-import-btn').onclick=()=> el.querySelector('#lp-import-file').click();
+  el.querySelector('#lp-import-file').onchange=(e)=>{
+    const file=e.target.files[0]; if(!file) return;
+    const reader=new FileReader();
+    reader.onload=()=>{
+      let data;
+      try{ data=JSON.parse(reader.result); }catch(err){ alert('Datei ist kein gültiges JSON.'); e.target.value=''; return; }
+      const incoming = data && data.lists && data.lists.lager ? data.lists.lager : null;
+      if(!incoming){ alert('Keine Lagerplatz-Liste in der Datei gefunden.'); e.target.value=''; return; }
+      const L=loadLists(); let added=0;
+      ['BR','WK'].forEach(area=>{
+        L.lager[area]=L.lager[area]||[];
+        (incoming[area]||[]).forEach(v=>{
+          v=String(v).trim(); if(!v) return;
+          if(!L.lager[area].some(x=>x.toLowerCase()===v.toLowerCase())){ L.lager[area].push(v); added++; }
+        });
+      });
+      saveLists(L);
+      addLog('Lagerplätze eingelesen', 'hinzugefügt: '+added);
+      renderDataPanel();
+      e.target.value='';
+      alert('Lagerplätze zusammengeführt.\nNeu hinzugefügt: '+added);
+    };
+    reader.readAsText(file);
+  };
 }
 
 /* Fristenberechnung + Status für ein Gerät */
