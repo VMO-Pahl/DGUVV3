@@ -184,6 +184,10 @@
       <input id="su-pw2" type="password" autocomplete="new-password">
       <button class="btn btn-primary" id="su-go">Admin anlegen</button>
       <div class="msg" id="su-msg"></div>
+      <div class="accent" style="margin:16px 0;"></div>
+      <p class="muted" style="margin:0 0 8px;">Schon auf einem anderen Gerät eingerichtet? Dann kannst du die exportierte Benutzerliste hier einlesen und dich danach anmelden.</p>
+      <button class="btn btn-outline" id="su-import-btn">Benutzerliste importieren</button>
+      <input type="file" id="su-import-file" class="hidden">
     </div>
     <p class="foot">Lokale Speicherung auf diesem Gerät · keine serverseitige Sicherheit</p>
   </div>
@@ -202,6 +206,9 @@
       <input id="li-pw" type="password" autocomplete="current-password">
       <button class="btn btn-primary" id="li-go">Anmelden</button>
       <div class="msg" id="li-msg"></div>
+      <div class="accent" style="margin:16px 0;"></div>
+      <button class="btn btn-outline" id="li-import-btn">Benutzer importieren</button>
+      <input type="file" id="li-import-file" class="hidden">
     </div>
     <p class="foot">Lokale Speicherung auf diesem Gerät · keine serverseitige Sicherheit</p>
   </div>
@@ -303,6 +310,11 @@
 
     <!-- Benutzerverwaltung (nur Admin) -->
     <div id="panel-users" class="hidden">
+      <div class="actions-row">
+        <button class="btn btn-outline btn-sm" id="users-export">Benutzer exportieren</button>
+        <button class="btn btn-outline btn-sm" id="users-import-btn">Benutzer einlesen</button>
+        <input type="file" id="users-import-file" class="hidden">
+      </div>
       <div class="card" style="margin-bottom:14px;">
         <p style="margin:0 0 4px; font-weight:700;">Neuen Benutzer anlegen</p>
         <label>Benutzername</label>
@@ -3985,6 +3997,76 @@ document.getElementById('restore-file').addEventListener('change', e=>{
   };
   reader.readAsText(file);
 });
+
+/* ===================== Benutzer exportieren / einlesen ===================== */
+/* Kern: Benutzer aus Datei zusammenführen. Rückgabe {added,updated} oder {error} */
+function mergeUsers(data){
+  if(!data || !Array.isArray(data.users)) return {error:'Keine Benutzerliste in der Datei gefunden.'};
+  const cur=loadUsers();
+  const byName={}; cur.forEach(u=> byName[u.username.toLowerCase()]=u);
+  let added=0, updated=0;
+  data.users.forEach(u=>{
+    if(!u || !u.username || !u.salt || !u.hash || !u.role) return;
+    const key=u.username.toLowerCase(); const ex=byName[key];
+    if(ex){ ex.salt=u.salt; ex.hash=u.hash; ex.role=u.role; updated++; }
+    else { const nu={ username:u.username, salt:u.salt, hash:u.hash, role:u.role, created:u.created||new Date().toISOString() }; cur.push(nu); byName[key]=nu; added++; }
+  });
+  if(!cur.some(u=>u.role==='admin')) return {error:'Es muss mindestens ein Administrator vorhanden bleiben.'};
+  saveUsers(cur);
+  return {added, updated};
+}
+
+document.getElementById('users-export').addEventListener('click', ()=>{
+  const data={ app:'DGUVV3-tool', type:'users', version:1, exported:new Date().toISOString(), users:loadUsers() };
+  downloadFile('DGUVV3-Benutzer-'+new Date().toISOString().slice(0,10)+'.json', JSON.stringify(data,null,2), 'application/json');
+  addLog('Benutzer exportiert', loadUsers().length+' Benutzer');
+});
+document.getElementById('users-import-btn').addEventListener('click', ()=> document.getElementById('users-import-file').click());
+document.getElementById('users-import-file').addEventListener('change', e=>{
+  const file=e.target.files[0]; if(!file) return;
+  const reader=new FileReader();
+  reader.onload=()=>{
+    let data;
+    try{ data=JSON.parse(reader.result); }
+    catch(err){ alert('Datei ist kein gültiges JSON.'); e.target.value=''; return; }
+    if(!Array.isArray(data.users)){ alert('Keine Benutzerliste in der Datei gefunden.'); e.target.value=''; return; }
+    if(!confirm('Benutzer einlesen und zusammenführen?\nNeue Konten werden hinzugefügt, gleichnamige Konten mit den Anmeldedaten aus der Datei aktualisiert.')){ e.target.value=''; return; }
+    const res=mergeUsers(data);
+    e.target.value='';
+    if(res.error){ alert('Import abgebrochen: '+res.error); return; }
+    addLog('Benutzer eingelesen', 'hinzugefügt: '+res.added+', aktualisiert: '+res.updated);
+    renderUsers();
+    alert('Benutzer zusammengeführt.\nHinzugefügt: '+res.added+'\nAktualisiert: '+res.updated);
+  };
+  reader.readAsText(file);
+});
+
+/* Vorab-Import (vor der Anmeldung, z. B. auf neuem Gerät) */
+function handlePreloginImport(file, fromSetup){
+  const reader=new FileReader();
+  reader.onload=()=>{
+    let data;
+    try{ data=JSON.parse(reader.result); }
+    catch(err){ alert('Datei ist kein gültiges JSON.'); return; }
+    if(!Array.isArray(data.users)){ alert('Keine Benutzerliste in der Datei gefunden.'); return; }
+    const res=mergeUsers(data);
+    if(res.error){ alert('Import abgebrochen: '+res.error); return; }
+    addLog('Benutzer eingelesen (vor Anmeldung)', 'hinzugefügt: '+res.added+', aktualisiert: '+res.updated);
+    alert('Benutzer importiert.\nHinzugefügt: '+res.added+'\nAktualisiert: '+res.updated+'\n\nBitte jetzt mit deinem Benutzernamen und Passwort anmelden.');
+    show('view-login'); // es gibt nun Benutzer -> Login zeigen
+  };
+  reader.readAsText(file);
+}
+const suImpBtn=document.getElementById('su-import-btn');
+if(suImpBtn){
+  suImpBtn.addEventListener('click', ()=> document.getElementById('su-import-file').click());
+  document.getElementById('su-import-file').addEventListener('change', e=>{ const f=e.target.files[0]; if(f) handlePreloginImport(f, true); e.target.value=''; });
+}
+const liImpBtn=document.getElementById('li-import-btn');
+if(liImpBtn){
+  liImpBtn.addEventListener('click', ()=> document.getElementById('li-import-file').click());
+  document.getElementById('li-import-file').addEventListener('change', e=>{ const f=e.target.files[0]; if(f) handlePreloginImport(f, false); e.target.value=''; });
+}
 
 /* ===================== QR-Deeplink ===================== */
 function openDevice(id){
