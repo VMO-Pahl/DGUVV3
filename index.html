@@ -4091,18 +4091,40 @@ function openManual(){
 ['li-help-btn','su-help-btn','btn-help'].forEach(id=>{ const b=document.getElementById(id); if(b) b.addEventListener('click', openManual); });
 
 /* ===================== Materialetiketten (eingebettete HTML-Anwendung) ===================== */
+/* Öffnet zuerst die externe Datei materialetiketten.html (selbst updatebar),
+   fällt bei Fehlen/Offline auf die eingebettete Kopie zurück. */
+function embeddedMaterialUrl(){
+  const b64=window.MATERIAL_HTML_B64;
+  if(!b64) return null;
+  const bin=atob(b64); const len=bin.length; const bytes=new Uint8Array(len);
+  for(let i=0;i<len;i++) bytes[i]=bin.charCodeAt(i);
+  const blob=new Blob([bytes], {type:'text/html;charset=utf-8'});
+  return URL.createObjectURL(blob);
+}
 function openMaterial(){
-  try{
-    const b64=window.MATERIAL_HTML_B64;
-    if(!b64){ alert('Die Materialetiketten sind in dieser Version nicht eingebettet.'); return; }
-    const bin=atob(b64); const len=bin.length; const bytes=new Uint8Array(len);
-    for(let i=0;i<len;i++) bytes[i]=bin.charCodeAt(i);
-    const blob=new Blob([bytes], {type:'text/html;charset=utf-8'});
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a'); a.href=url; a.target='_blank'; a.rel='noopener';
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  const extUrl = new URL('materialetiketten.html', location.href).href;
+  // Tab sofort (innerhalb der Nutzer-Aktion) öffnen, damit iOS ihn nicht blockiert
+  let win = null;
+  try{ win = window.open('', '_blank'); }catch(e){ win = null; }
+  const useEmbedded = ()=>{
+    const url = embeddedMaterialUrl();
+    if(!url){ if(win) win.close(); alert('Materialetiketten sind nicht verfügbar.'); return; }
+    if(win){ win.location = url; } else {
+      const a=document.createElement('a'); a.href=url; a.target='_blank'; a.rel='noopener';
+      document.body.appendChild(a); a.click(); a.remove();
+    }
     setTimeout(()=>{ try{ URL.revokeObjectURL(url); }catch(e){} }, 120000);
-  }catch(err){ alert('Materialetiketten konnten nicht geöffnet werden: '+err.message); }
+  };
+  const useExternal = ()=>{
+    if(win){ win.location = extUrl; } else {
+      const a=document.createElement('a'); a.href=extUrl; a.target='_blank'; a.rel='noopener';
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+  };
+  // Prüfen, ob die externe Datei vorhanden ist
+  fetch(extUrl, { method:'GET', cache:'no-store' })
+    .then(r => { if(r && r.ok) useExternal(); else useEmbedded(); })
+    .catch(() => useEmbedded());
 }
 (function(){ const b=document.getElementById('btn-material'); if(b) b.addEventListener('click', openMaterial); })();
 
