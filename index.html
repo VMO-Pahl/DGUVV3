@@ -259,10 +259,12 @@
     <div id="panel-devices" class="hidden">
       <div class="actions-row">
         <button class="btn btn-outline btn-sm" id="dev-toggle-form">+ Neues Gerät</button>
-        <button class="btn btn-outline btn-sm" id="dev-export">Übersicht (Excel-Protokoll)</button>
-        <button class="btn btn-outline btn-sm admin-only" id="dev-import">Excel importieren</button>
+        <button class="btn btn-outline btn-sm" id="dev-export">Excel Export</button>
+        <button class="btn btn-outline btn-sm" id="dev-import">Excel importieren</button>
+        <button class="btn btn-outline btn-sm" id="lager-import-btn">Lagerorte einlesen</button>
         <button class="btn btn-outline btn-sm" id="dev-export-tests">Prüfungen als CSV</button>
         <input type="file" id="import-file" class="hidden">
+        <input type="file" id="lager-import-file" class="hidden">
       </div>
 
       <div class="card hidden" id="dev-form" style="margin-bottom:14px;">
@@ -4127,6 +4129,40 @@ function openMaterial(){
     .catch(() => useEmbedded());
 }
 (function(){ const b=document.getElementById('btn-material'); if(b) b.addEventListener('click', openMaterial); })();
+
+/* ===================== Lagerorte einlesen (für alle Nutzer, Geräte-Seite) ===================== */
+function importLagerFile(file){
+  const reader=new FileReader();
+  reader.onload=()=>{
+    let data;
+    try{ data=JSON.parse(reader.result); }
+    catch(e){ alert('Datei ist kein gültiges JSON.'); return; }
+    const incoming = (data && data.lists && data.lists.lager) ? data.lists.lager : null;
+    if(!incoming){ alert('Keine Lagerplatz-Liste in der Datei gefunden.'); return; }
+    const L=loadLists(); let added=0;
+    ['BR','WK'].forEach(area=>{
+      L.lager[area]=L.lager[area]||[];
+      (incoming[area]||[]).forEach(v=>{
+        v=String(v).trim(); if(!v) return;
+        if(!L.lager[area].some(x=>x.toLowerCase()===v.toLowerCase())){ L.lager[area].push(v); added++; }
+      });
+    });
+    saveLists(L);
+    addLog('Lagerplätze eingelesen', 'hinzugefügt: '+added);
+    if(typeof renderDataPanel==='function'){ try{ renderDataPanel(); }catch(e){} }
+    if(typeof fillLagerOptions==='function'){ try{ fillLagerOptions(); }catch(e){} }
+    alert('Lagerplätze zusammengeführt.\nNeu hinzugefügt: '+added);
+  };
+  reader.readAsText(file);
+}
+(function(){
+  const btn=document.getElementById('lager-import-btn');
+  const inp=document.getElementById('lager-import-file');
+  if(btn && inp){
+    btn.addEventListener('click', ()=> inp.click());
+    inp.addEventListener('change', e=>{ const f=e.target.files[0]; if(f) importLagerFile(f); e.target.value=''; });
+  }
+})();
 
 /* ===================== QR-Deeplink ===================== */
 function openDevice(id){
