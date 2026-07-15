@@ -271,9 +271,11 @@
       <div class="card hidden" id="dev-form" style="margin-bottom:14px;">
         <p style="margin:0 0 4px; font-weight:700;">Neues Gerät anlegen</p>
         <label>Inventar-/Kennnummer</label>
-        <input id="d-inv" autocapitalize="characters" autocomplete="off">
+        <input id="d-inv" autocapitalize="characters" autocomplete="off" list="dl-inv">
+        <datalist id="dl-inv"></datalist>
         <label>Bezeichnung</label>
-        <input id="d-name" autocomplete="off">
+        <input id="d-name" autocomplete="off" list="dl-name">
+        <datalist id="dl-name"></datalist>
         <label>Bereich</label>
         <select id="d-area">
           <option value="BR">Büro (BR)</option>
@@ -284,7 +286,8 @@
         <label>Lagerplatz</label>
         <select id="d-lager"></select>
         <label>Standort / Bemerkung (optional)</label>
-        <input id="d-loc" autocomplete="off">
+        <input id="d-loc" autocomplete="off" list="dl-loc">
+        <datalist id="dl-loc"></datalist>
         <label>Art</label>
         <select id="d-type">
           <option value="ortsveränderlich">ortsveränderlich (z. B. Verlängerung, Akkulader)</option>
@@ -3748,7 +3751,26 @@ function updateCodePreview(){
   const a=document.getElementById('d-area'), c=document.getElementById('d-code');
   if(a && c) c.value=nextCode(a.value);
 }
-function refreshDeviceForm(){ fillLagerOptions(); updateCodePreview(); }
+/* Vorschlagslisten (datalist) aus bereits gespeicherten Geräten füllen */
+function fillDeviceDatalists(){
+  const devs=loadDevices();
+  const fill=(listId, key)=>{
+    const dl=document.getElementById(listId);
+    if(!dl) return;
+    const seen=new Set(), vals=[];
+    devs.forEach(d=>{
+      const v=(d[key]==null?'':String(d[key])).trim();
+      if(v && !seen.has(v)){ seen.add(v); vals.push(v); }
+    });
+    vals.sort((a,b)=>a.localeCompare(b,'de',{sensitivity:'base'}));
+    dl.innerHTML='';
+    vals.forEach(v=>{ const o=document.createElement('option'); o.value=v; dl.appendChild(o); });
+  };
+  fill('dl-inv','inv');
+  fill('dl-name','name');
+  fill('dl-loc','location');
+}
+function refreshDeviceForm(){ fillLagerOptions(); updateCodePreview(); fillDeviceDatalists(); }
 
 /* Formular: Gerät anlegen */
 document.getElementById('dev-toggle-form').addEventListener('click', ()=>{
