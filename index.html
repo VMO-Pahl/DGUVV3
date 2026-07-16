@@ -260,6 +260,7 @@
     <div id="panel-devices" class="hidden">
       <div class="actions-row">
         <button class="btn btn-outline btn-sm" id="dev-toggle-form">+ Neues Gerät</button>
+        <button class="btn btn-outline btn-sm" id="qr-scan-btn">📷 QR scannen</button>
         <button class="btn btn-outline btn-sm" id="dev-export">Excel Export</button>
         <button class="btn btn-outline btn-sm" id="dev-import">Excel importieren</button>
         <button class="btn btn-outline btn-sm" id="lager-import-btn">Lagerorte einlesen</button>
@@ -271,11 +272,9 @@
       <div class="card hidden" id="dev-form" style="margin-bottom:14px;">
         <p style="margin:0 0 4px; font-weight:700;">Neues Gerät anlegen</p>
         <label>Inventar-/Kennnummer</label>
-        <input id="d-inv" autocapitalize="characters" autocomplete="off" list="dl-inv">
-        <datalist id="dl-inv"></datalist>
+        <input id="d-inv" autocapitalize="characters" autocomplete="off">
         <label>Bezeichnung</label>
-        <input id="d-name" autocomplete="off" list="dl-name">
-        <datalist id="dl-name"></datalist>
+        <input id="d-name" autocomplete="off">
         <label>Bereich</label>
         <select id="d-area">
           <option value="BR">Büro (BR)</option>
@@ -286,8 +285,7 @@
         <label>Lagerplatz</label>
         <select id="d-lager"></select>
         <label>Standort / Bemerkung (optional)</label>
-        <input id="d-loc" autocomplete="off" list="dl-loc">
-        <datalist id="dl-loc"></datalist>
+        <input id="d-loc" autocomplete="off">
         <label>Art</label>
         <select id="d-type">
           <option value="ortsveränderlich">ortsveränderlich (z. B. Verlängerung, Akkulader)</option>
@@ -385,6 +383,7 @@
 <!-- Prüf-Dialog & QR (Overlays) -->
 <div id="exam-modal" class="modal hidden"></div>
 <div id="qr-modal" class="modal hidden"></div>
+<div id="qr-scan-modal" class="modal hidden"></div>
 <div id="sig-modal" class="modal hidden"></div>
 <div id="import-modal" class="modal hidden"></div>
 
@@ -3751,26 +3750,7 @@ function updateCodePreview(){
   const a=document.getElementById('d-area'), c=document.getElementById('d-code');
   if(a && c) c.value=nextCode(a.value);
 }
-/* Vorschlagslisten (datalist) aus bereits gespeicherten Geräten füllen */
-function fillDeviceDatalists(){
-  const devs=loadDevices();
-  const fill=(listId, key)=>{
-    const dl=document.getElementById(listId);
-    if(!dl) return;
-    const seen=new Set(), vals=[];
-    devs.forEach(d=>{
-      const v=(d[key]==null?'':String(d[key])).trim();
-      if(v && !seen.has(v)){ seen.add(v); vals.push(v); }
-    });
-    vals.sort((a,b)=>a.localeCompare(b,'de',{sensitivity:'base'}));
-    dl.innerHTML='';
-    vals.forEach(v=>{ const o=document.createElement('option'); o.value=v; dl.appendChild(o); });
-  };
-  fill('dl-inv','inv');
-  fill('dl-name','name');
-  fill('dl-loc','location');
-}
-function refreshDeviceForm(){ fillLagerOptions(); updateCodePreview(); fillDeviceDatalists(); }
+function refreshDeviceForm(){ fillLagerOptions(); updateCodePreview(); }
 
 /* Formular: Gerät anlegen */
 document.getElementById('dev-toggle-form').addEventListener('click', ()=>{
@@ -3778,6 +3758,7 @@ document.getElementById('dev-toggle-form').addEventListener('click', ()=>{
   f.classList.toggle('hidden');
   if(!f.classList.contains('hidden')) refreshDeviceForm();
 });
+document.getElementById('qr-scan-btn').addEventListener('click', openQRScanner);
 document.getElementById('d-area').addEventListener('change', refreshDeviceForm);
 document.getElementById('d-presets').addEventListener('click', e=>{
   const b=e.target.closest('button[data-m]'); if(!b) return;
@@ -4268,6 +4249,129 @@ function openDevice(id){
     alert('Das gescannte Gerät wurde auf diesem Gerät nicht gefunden. Bitte Datensicherung einspielen oder Gerät anlegen.');
   }
   try{ history.replaceState(null,'',location.pathname); }catch(e){}
+}
+
+// ---- QR-Scanner ----
+let qrScanState = { stream:null, raf:null, active:false, detector:null };
+
+function stopQRScan(){
+  qrScanState.active = false;
+  if(qrScanState.raf){ cancelAnimationFrame(qrScanState.raf); qrScanState.raf=null; }
+  if(qrScanState.stream){
+    qrScanState.stream.getTracks().forEach(t=>{ try{ t.stop(); }catch(e){} });
+    qrScanState.stream = null;
+  }
+  const m=document.getElementById('qr-scan-modal');
+  if(m){ m.classList.add('hidden'); m.innerHTML=''; }
+}
+
+function loadJsQR(){
+  return new Promise((resolve, reject)=>{
+    if(window.jsQR){ resolve(window.jsQR); return; }
+    const s=document.createElement('script');
+    s.src='https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js';
+    s.onload=()=> window.jsQR ? resolve(window.jsQR) : reject(new Error('jsQR nicht geladen'));
+    s.onerror=()=> reject(new Error('jsQR konnte nicht geladen werden'));
+    document.head.appendChild(s);
+  });
+}
+
+function handleQRText(text){
+  if(!text) return false;
+  const m = text.match(/device=([^&\s]+)/);
+  if(!m) return false;
+  let id;
+  try{ id=decodeURIComponent(m[1]); }catch(e){ id=m[1]; }
+  stopQRScan();
+  openDevice(id);
+  return true;
+}
+
+async function openQRScanner(){
+  const modal=document.getElementById('qr-scan-modal');
+  if(!modal) return;
+  modal.innerHTML =
+    '<div class="modal-head">'
+    + '<b>QR-Code scannen</b>'
+    + '<button class="btn btn-outline btn-sm" id="qr-scan-close" style="margin-left:auto;">Schließen</button>'
+    + '</div>'
+    + '<div class="modal-body" style="display:flex;flex-direction:column;align-items:center;gap:12px;">'
+    + '<video id="qr-scan-video" playsinline muted autoplay style="width:100%;max-width:480px;border-radius:8px;background:#000;"></video>'
+    + '<div id="qr-scan-hint" style="color:var(--ink-soft);font-size:13px;text-align:center;">Kamera wird geöffnet …</div>'
+    + '</div>';
+  modal.classList.remove('hidden');
+
+  document.getElementById('qr-scan-close').addEventListener('click', stopQRScan);
+
+  const video=document.getElementById('qr-scan-video');
+  const hint=document.getElementById('qr-scan-hint');
+
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    hint.textContent='Kamerazugriff wird von diesem Browser nicht unterstützt.';
+    return;
+  }
+  if(!window.isSecureContext && location.hostname!=='localhost' && location.hostname!=='127.0.0.1'){
+    hint.textContent='Kamerazugriff benötigt HTTPS. Bitte die App über eine HTTPS-Adresse öffnen.';
+    return;
+  }
+
+  try{
+    qrScanState.stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' } });
+  }catch(e){
+    hint.textContent='Kamerazugriff wurde verweigert oder ist nicht verfügbar. Bitte in den Browsereinstellungen erlauben.';
+    return;
+  }
+
+  video.srcObject = qrScanState.stream;
+  try{ await video.play(); }catch(e){}
+  qrScanState.active = true;
+  hint.textContent='Kamera auf den QR-Code richten …';
+
+  // Bevorzugt native BarcodeDetector, sonst jsQR-Fallback
+  let useNative=false;
+  if('BarcodeDetector' in window){
+    try{
+      const formats = await window.BarcodeDetector.getSupportedFormats();
+      if(formats.includes('qr_code')){
+        qrScanState.detector = new window.BarcodeDetector({ formats:['qr_code'] });
+        useNative=true;
+      }
+    }catch(e){ useNative=false; }
+  }
+
+  if(useNative){
+    const scanNative=async ()=>{
+      if(!qrScanState.active) return;
+      try{
+        const codes = await qrScanState.detector.detect(video);
+        for(const c of codes){ if(handleQRText(c.rawValue)) return; }
+      }catch(e){}
+      qrScanState.raf = requestAnimationFrame(scanNative);
+    };
+    qrScanState.raf = requestAnimationFrame(scanNative);
+    return;
+  }
+
+  // Fallback: jsQR
+  let jsQR;
+  try{ jsQR = await loadJsQR(); }
+  catch(e){ hint.textContent='QR-Erkennung konnte nicht geladen werden. Bitte Internetverbindung prüfen.'; return; }
+
+  const canvas=document.createElement('canvas');
+  const ctx=canvas.getContext('2d', { willReadFrequently:true });
+  const scanJs=()=>{
+    if(!qrScanState.active) return;
+    if(video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth){
+      canvas.width=video.videoWidth;
+      canvas.height=video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const img=ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const res=jsQR(img.data, img.width, img.height, { inversionAttempts:'dontInvert' });
+      if(res && handleQRText(res.data)) return;
+    }
+    qrScanState.raf = requestAnimationFrame(scanJs);
+  };
+  qrScanState.raf = requestAnimationFrame(scanJs);
 }
 
 /* ===================== Speicher mit Quota-Prüfung ===================== */
