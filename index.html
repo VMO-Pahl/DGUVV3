@@ -3148,7 +3148,7 @@ var qrcode = function() {
 <script>
 /* ===================== Speicher-Wrapper ===================== */
 const mem = {}; let persistent = true;
-function rawGet(k){ try{ return localStorage.getItem(k); }catch(e){ persistent=false; return (k in mem)?mem[k]:null; } }
+function rawGet(k){ if(!persistent && (k in mem)) return mem[k]; try{ return localStorage.getItem(k); }catch(e){ persistent=false; return (k in mem)?mem[k]:null; } }
 function rawSet(k,v){ try{ localStorage.setItem(k,v); }catch(e){ persistent=false; mem[k]=v; } }
 
 const USERS_KEY='dguv_users', LOG_KEY='dguv_log', DEVICES_KEY='dguv_devices', LISTS_KEY='dguv_lists';
@@ -3484,6 +3484,21 @@ function nextCode(area){
 }
 
 /* Lagerplatz-Dropdown im Formular füllen (abhängig vom Bereich) */
+/* Lagerplatz-Optionen als HTML für ein beliebiges Formular (z. B. Bearbeiten).
+   Der aktuell gespeicherte Wert bleibt immer wählbar, auch wenn er (noch)
+   nicht in der Lagerplatz-Liste des Bereichs steht. */
+function lagerOptionsHtml(area, selected){
+  const arr=(loadLists().lager[area])||[];
+  let html='';
+  if(selected && arr.indexOf(selected)===-1){
+    html+='<option value="'+escapeHtml(selected)+'" selected>'+escapeHtml(selected)+' (aktuell)</option>';
+  }
+  if(!arr.length && !selected){
+    html+='<option value="">(keine – im Zahnrad → Daten anlegen)</option>';
+  }
+  arr.forEach(v=>{ html+='<option value="'+escapeHtml(v)+'"'+(v===selected?' selected':'')+'>'+escapeHtml(v)+'</option>'; });
+  return html;
+}
 function fillLagerOptions(){
   const areaEl=document.getElementById('d-area'); const sel=document.getElementById('d-lager');
   if(!areaEl || !sel) return;
@@ -3643,6 +3658,7 @@ function renderDevices(){
       '<div class="actions-row" style="margin:12px 0 6px;">'+
         '<button class="btn btn-primary btn-sm dev-exam">DGUV V3 prüfen</button>'+
         '<button class="btn btn-outline btn-sm dev-qr">QR-Code</button>'+
+        (isAdmin?'<button class="btn btn-outline btn-sm dev-edit">✏️ Bearbeiten</button>':'')+
       '</div>'+
       '<div class="cover-box">'+
         (d.cover ? '<img class="cover-prev" src="'+d.cover+'">' : '')+
@@ -3673,6 +3689,26 @@ function renderDevices(){
         (tests.length ? '<select class="hist-select"></select><div class="hist-detail" style="margin-top:10px;"></div>'
                       : '<p class="muted">Noch keine Prüfung erfasst.</p>')+
       '</div>'+
+      (isAdmin?(
+        '<div class="edit-box hidden" style="margin-top:14px; padding-top:12px; border-top:1px solid var(--soft);">'+
+          '<p style="font-weight:700; margin:0 0 6px;">Gerät bearbeiten</p>'+
+          '<label>Bezeichnung</label><input class="e-name" autocomplete="off">'+
+          '<label>Inventar-/Kennnummer</label><input class="e-inv" autocapitalize="characters" autocomplete="off">'+
+          '<label>Bereich</label><select class="e-area">'+
+            '<option value="BR">Büro (BR)</option><option value="WK">Fertigung (WK)</option></select>'+
+          '<label>Lagerplatz</label><select class="e-lager"></select>'+
+          '<label>Standort / Bemerkung (optional)</label><input class="e-loc" autocomplete="off">'+
+          '<label>Art</label><select class="e-type">'+
+            '<option value="ortsveränderlich">ortsveränderlich</option>'+
+            '<option value="ortsfest">ortsfest</option></select>'+
+          '<label>Prüfintervall (Monate)</label><input class="e-interval" type="number" min="1" step="1" inputmode="numeric">'+
+          '<div class="kv" style="margin-top:8px; color:var(--gray);">Kennung <b>'+escapeHtml(d.code||'—')+'</b> bleibt unverändert, damit vorhandene QR-Codes gültig bleiben.</div>'+
+          '<div class="actions-row" style="margin-top:10px;">'+
+            '<button class="btn btn-primary btn-sm e-save">Änderungen speichern</button>'+
+            '<button class="btn btn-outline btn-sm e-cancel">Abbrechen</button>'+
+          '</div>'+
+        '</div>'
+      ):'')+
       (isAdmin?'<button class="btn btn-danger btn-sm t-del" style="margin-top:14px;">Gerät löschen</button>':'');
     card.appendChild(body);
 
@@ -3738,6 +3774,47 @@ function renderDevices(){
         all.splice(i,1); saveDevices(all);
         addLog('Gerät gelöscht', d.name+' ('+(d.inv||'—')+')');
         renderDevices(); renderDashboard();
+      });
+
+      // ---- Gerät bearbeiten (Eingabefehler korrigieren) ----
+      const editBox=body.querySelector('.edit-box');
+      const eName=body.querySelector('.e-name'),   eInv=body.querySelector('.e-inv'),
+            eArea=body.querySelector('.e-area'),    eLager=body.querySelector('.e-lager'),
+            eLoc=body.querySelector('.e-loc'),      eType=body.querySelector('.e-type'),
+            eInt=body.querySelector('.e-interval');
+      function fillEdit(){
+        eName.value=d.name||'';
+        eInv.value=d.inv||'';
+        eArea.value=(d.area==='WK'?'WK':'BR');
+        eLager.innerHTML=lagerOptionsHtml(eArea.value, d.lager||'');
+        eLoc.value=d.location||'';
+        eType.value=(d.type==='ortsfest'?'ortsfest':'ortsveränderlich');
+        eInt.value=d.intervalMonths||12;
+      }
+      body.querySelector('.dev-edit').addEventListener('click', ()=>{
+        if(editBox.classList.contains('hidden')){ fillEdit(); editBox.classList.remove('hidden'); editBox.scrollIntoView({behavior:'smooth', block:'nearest'}); }
+        else editBox.classList.add('hidden');
+      });
+      // Bei Bereichswechsel die passenden Lagerplätze anbieten
+      eArea.addEventListener('change', ()=>{ eLager.innerHTML=lagerOptionsHtml(eArea.value, ''); });
+      body.querySelector('.e-cancel').addEventListener('click', ()=> editBox.classList.add('hidden'));
+      body.querySelector('.e-save').addEventListener('click', ()=>{
+        const name=eName.value.trim();
+        const inv=eInv.value.trim();
+        const area=(eArea.value==='WK'?'WK':'BR');
+        const lager=eLager.value;
+        const loc=eLoc.value.trim();
+        const type=(eType.value==='ortsfest'?'ortsfest':'ortsveränderlich');
+        const interval=parseInt(eInt.value,10);
+        if(!name){ alert('Bitte eine Bezeichnung angeben.'); return; }
+        if(!interval || interval<1){ alert('Bitte ein gültiges Prüfintervall (Monate) angeben.'); return; }
+        const all=loadDevices(); const t=all.find(x=>x.id===d.id);
+        if(!t){ alert('Gerät nicht gefunden – bitte Ansicht neu laden.'); return; }
+        const before=(t.name||'—')+' ('+(t.inv||'—')+')';
+        t.name=name; t.inv=inv; t.area=area; t.lager=lager; t.location=loc; t.type=type; t.intervalMonths=interval;
+        if(!saveDevicesChecked(all)){ alert('Speicher voll: Änderungen konnten nicht gespeichert werden. Bitte sichern und alte Fotos entfernen.'); return; }
+        addLog('Gerät bearbeitet', before+' → '+name+' ('+(inv||'—')+')');
+        renderDevices(); renderDashboard(); openDevice(d.id);
       });
     }
 
@@ -4085,16 +4162,25 @@ function mergeUsers(data){
   if(!data || !Array.isArray(data.users)) return {error:'Keine Benutzerliste in der Datei gefunden.'};
   const cur=loadUsers();
   const byName={}; cur.forEach(u=> byName[u.username.toLowerCase()]=u);
-  let added=0, updated=0;
+  let added=0, updated=0, skipped=0;
+  const addedNames=[], updatedNames=[];
   data.users.forEach(u=>{
-    if(!u || !u.username || !u.salt || !u.hash || !u.role) return;
+    if(!u || !u.username || !u.salt || !u.hash || !u.role){ skipped++; return; }
     const key=u.username.toLowerCase(); const ex=byName[key];
-    if(ex){ ex.salt=u.salt; ex.hash=u.hash; ex.role=u.role; updated++; }
-    else { const nu={ username:u.username, salt:u.salt, hash:u.hash, role:u.role, created:u.created||new Date().toISOString() }; cur.push(nu); byName[key]=nu; added++; }
+    if(ex){ ex.salt=u.salt; ex.hash=u.hash; ex.role=u.role; updated++; updatedNames.push(u.username); }
+    else { const nu={ username:u.username, salt:u.salt, hash:u.hash, role:u.role, created:u.created||new Date().toISOString() }; cur.push(nu); byName[key]=nu; added++; addedNames.push(u.username); }
   });
   if(!cur.some(u=>u.role==='admin')) return {error:'Es muss mindestens ein Administrator vorhanden bleiben.'};
   saveUsers(cur);
-  return {added, updated};
+  // Persistenz prüfen: erneut laden und gegen die erwarteten Konten abgleichen.
+  // So fällt ein stiller Speicherfehler (z. B. privater Modus / voller Speicher) sofort auf.
+  let persistErr=false;
+  try{
+    const check=loadUsers(); const have={}; check.forEach(u=> have[u.username.toLowerCase()]=u);
+    const expect=addedNames.concat(updatedNames);
+    persistErr = (!persistent) || expect.some(n=> !have[n.toLowerCase()]);
+  }catch(e){ persistErr=true; }
+  return {added, updated, skipped, addedNames, updatedNames, persistErr};
 }
 
 document.getElementById('users-export').addEventListener('click', ()=>{
@@ -4115,9 +4201,12 @@ document.getElementById('users-import-file').addEventListener('change', e=>{
     const res=mergeUsers(data);
     e.target.value='';
     if(res.error){ alert('Import abgebrochen: '+res.error); return; }
-    addLog('Benutzer eingelesen', 'hinzugefügt: '+res.added+', aktualisiert: '+res.updated);
+    addLog('Benutzer eingelesen', 'hinzugefügt: '+res.added+', aktualisiert: '+res.updated+(res.skipped?(', übersprungen: '+res.skipped):''));
     renderUsers();
-    alert('Benutzer zusammengeführt.\nHinzugefügt: '+res.added+'\nAktualisiert: '+res.updated);
+    let msg='Benutzer zusammengeführt.\nHinzugefügt: '+res.added+'\nAktualisiert: '+res.updated;
+    if(res.skipped) msg+='\n\nAchtung: '+res.skipped+' Eintrag/Einträge konnten nicht gelesen werden (fehlende Felder Salt/Hash/Rolle – vermutlich Datei aus einer älteren Version).';
+    if(res.persistErr) msg+='\n\nWARNUNG: Die Daten konnten NICHT dauerhaft gespeichert werden (z. B. privater Browser-Modus oder voller Speicher). Die Konten stehen nach dem Neuladen nicht zur Verfügung.';
+    alert(msg);
   };
   reader.readAsText(file);
 });
@@ -4132,9 +4221,18 @@ function handlePreloginImport(file, fromSetup){
     if(!Array.isArray(data.users)){ alert('Keine Benutzerliste in der Datei gefunden.'); return; }
     const res=mergeUsers(data);
     if(res.error){ alert('Import abgebrochen: '+res.error); return; }
-    addLog('Benutzer eingelesen (vor Anmeldung)', 'hinzugefügt: '+res.added+', aktualisiert: '+res.updated);
-    alert('Benutzer importiert.\nHinzugefügt: '+res.added+'\nAktualisiert: '+res.updated+'\n\nBitte jetzt mit deinem Benutzernamen und Passwort anmelden.');
-    show('view-login'); // es gibt nun Benutzer -> Login zeigen
+    addLog('Benutzer eingelesen (vor Anmeldung)', 'hinzugefügt: '+res.added+', aktualisiert: '+res.updated+(res.skipped?(', übersprungen: '+res.skipped):''));
+    let msg='Benutzer importiert.\nHinzugefügt: '+res.added+'\nAktualisiert: '+res.updated;
+    const names=res.addedNames.concat(res.updatedNames);
+    if(names.length) msg+='\nKonten: '+names.join(', ');
+    if(res.skipped) msg+='\n\nAchtung: '+res.skipped+' Eintrag/Einträge konnten nicht gelesen werden (fehlende Felder Salt/Hash/Rolle – vermutlich Datei aus einer älteren Version).';
+    if(res.persistErr){
+      msg+='\n\nWARNUNG: Die Daten konnten NICHT dauerhaft gespeichert werden (z. B. privater Browser-Modus oder voller Gerätespeicher). Deshalb schlägt die Anmeldung fehl. Bitte den privaten Modus verlassen bzw. Speicher freigeben und erneut importieren.';
+    } else {
+      msg+='\n\nBitte jetzt mit Benutzername und Passwort vom Ursprungsgerät anmelden.';
+    }
+    alert(msg);
+    if(!res.persistErr) show('view-login'); // es gibt nun Benutzer -> Login zeigen
   };
   reader.readAsText(file);
 }
@@ -4158,11 +4256,12 @@ function openExternalPdf(filename){
   try{
     var url = filename;
     if(location.protocol !== 'file:'){ url += (filename.indexOf('?')>=0?'&':'?') + 't=' + Date.now(); }
-    var win = window.open(url, '_blank', 'noopener');
-    if(!win){ location.href = url; }
+    var a = document.createElement('a');
+    a.href = url; a.target = '_blank'; a.rel = 'noopener';
+    document.body.appendChild(a); a.click(); a.remove();
   }catch(err){ alert('Die PDF-Datei konnte nicht geöffnet werden: '+err.message); }
 }
-function openManual(){ openExternalPdf('./Benutzer-Anleitung.pdf'); }
+function openManual(){ openExternalPdf('./Benutzeranleitung.pdf'); }
 ['li-help-btn','su-help-btn','btn-help'].forEach(id=>{ const b=document.getElementById(id); if(b) b.addEventListener('click', openManual); });
 function openAdminManual(){ openExternalPdf('./Admin-Handbuch.pdf'); }
 (function(){ const b=document.getElementById('btn-admin-manual'); if(b) b.addEventListener('click', openAdminManual); })();
