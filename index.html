@@ -4162,7 +4162,7 @@ function openExternalPdf(filename){
     if(!win){ location.href = url; }
   }catch(err){ alert('Die PDF-Datei konnte nicht geöffnet werden: '+err.message); }
 }
-function openManual(){ openExternalPdf('./Benutzeranleitung.pdf'); }
+function openManual(){ openExternalPdf('./Benutzer-Anleitung.pdf'); }
 ['li-help-btn','su-help-btn','btn-help'].forEach(id=>{ const b=document.getElementById(id); if(b) b.addEventListener('click', openManual); });
 function openAdminManual(){ openExternalPdf('./Admin-Handbuch.pdf'); }
 (function(){ const b=document.getElementById('btn-admin-manual'); if(b) b.addEventListener('click', openAdminManual); })();
