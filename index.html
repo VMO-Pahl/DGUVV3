@@ -286,6 +286,9 @@
         <select id="d-lager"></select>
         <label>Standort / Bemerkung (optional)</label>
         <input id="d-loc" autocomplete="off">
+        <label>Betriebsanleitung – Dateiname oder Link (optional)</label>
+        <input id="d-manual" autocomplete="off" placeholder="leer = automatisch aus Kennung">
+        <p class="hint">Leer lassen für den automatischen Pfad (Standardpfad + Kennung + „.pdf"). Ein Eintrag hier überschreibt den Automatik-Pfad – entweder ein Dateiname/relativer Pfad oder eine vollständige URL.</p>
         <label>Art</label>
         <select id="d-type">
           <option value="ortsveränderlich">ortsveränderlich (z. B. Verlängerung, Akkulader)</option>
@@ -3148,7 +3151,7 @@ var qrcode = function() {
 <script>
 /* ===================== Speicher-Wrapper ===================== */
 const mem = {}; let persistent = true;
-function rawGet(k){ if(!persistent && (k in mem)) return mem[k]; try{ return localStorage.getItem(k); }catch(e){ persistent=false; return (k in mem)?mem[k]:null; } }
+function rawGet(k){ try{ return localStorage.getItem(k); }catch(e){ persistent=false; return (k in mem)?mem[k]:null; } }
 function rawSet(k,v){ try{ localStorage.setItem(k,v); }catch(e){ persistent=false; mem[k]=v; } }
 
 const USERS_KEY='dguv_users', LOG_KEY='dguv_log', DEVICES_KEY='dguv_devices', LISTS_KEY='dguv_lists';
@@ -3160,6 +3163,17 @@ function loadLog(){ const r=rawGet(LOG_KEY); try{ return r?JSON.parse(r):[]; }ca
 function saveLog(l){ rawSet(LOG_KEY, JSON.stringify(l)); }
 function loadDevices(){ const r=rawGet(DEVICES_KEY); try{ return r?JSON.parse(r):[]; }catch(e){ return []; } }
 function saveDevices(d){ rawSet(DEVICES_KEY, JSON.stringify(d)); }
+
+/* Betriebsanleitungen: konfigurierbarer Standardpfad + Auflösung pro Gerät */
+const MANUAL_BASE_KEY='dguv_manual_base';
+const MANUAL_BASE_DEFAULT='anleitungen/';
+function getManualBase(){ const v=rawGet(MANUAL_BASE_KEY); return (v!==null && v!==undefined && v!=='') ? v : MANUAL_BASE_DEFAULT; }
+function setManualBase(v){ rawSet(MANUAL_BASE_KEY, v); }
+/* Override-Feld schlägt den Automatik-Pfad; sonst <Basispfad><Kennung>.pdf */
+function resolveManualUrl(dev){
+  if(dev && dev.manualUrl && String(dev.manualUrl).trim()) return String(dev.manualUrl).trim();
+  return getManualBase() + (dev && dev.code ? dev.code : '') + '.pdf';
+}
 
 /* ===================== Hash (cyrb53, gesalzen) ===================== */
 function cyrb53(str, seed=0){
@@ -3323,10 +3337,53 @@ document.getElementById('fb-send').addEventListener('click', ()=>{
   setTimeout(closeFeedback, 1800);
 });
 document.getElementById('btn-settings').addEventListener('click', ()=>{
-  renderUsers(); renderLog(); renderDataPanel();
+  renderUsers(); renderLog(); renderDataPanel(); renderSettingsPanel();
   switchSettings('data');
   document.getElementById('settings-modal').classList.remove('hidden');
 });
+
+/* Einstellungen: Standardpfad für Betriebsanleitungen */
+function renderSettingsPanel(){
+  const panel=document.getElementById('spanel-settings');
+  if(!panel) return;
+  let card=document.getElementById('manual-base-card');
+  if(!card){
+    card=document.createElement('div');
+    card.id='manual-base-card';
+    card.className='card';
+    card.style.marginBottom='14px';
+    card.innerHTML=
+      '<p style="font-weight:700; margin:0 0 6px;">Betriebsanleitungen – Standardpfad</p>'+
+      '<p class="hint" style="margin:0 0 8px;">Ordner oder Basis-URL, aus der die Anleitung automatisch abgeleitet wird. '+
+        'Ergebnis: Pfad + Kennung + ".pdf" (z. B. <code>anleitungen/BR-001.pdf</code>). '+
+        'Pro Gerät lässt sich der Pfad im Gerät überschreiben.</p>'+
+      '<label>Standardpfad</label>'+
+      '<input id="manual-base-input" autocomplete="off" placeholder="'+MANUAL_BASE_DEFAULT+'">'+
+      '<div class="actions-row" style="margin-top:8px;">'+
+        '<button class="btn btn-primary btn-sm" id="manual-base-save">Speichern</button>'+
+        '<button class="btn btn-outline btn-sm" id="manual-base-reset">Zurücksetzen</button>'+
+      '</div>'+
+      '<div class="msg" id="manual-base-msg" style="margin-top:6px;"></div>';
+    panel.insertBefore(card, panel.firstChild);
+    card.querySelector('#manual-base-save').addEventListener('click', ()=>{
+      const val=document.getElementById('manual-base-input').value.trim();
+      setManualBase(val);
+      const m=document.getElementById('manual-base-msg');
+      m.style.color='#1c7a2e'; m.textContent='Standardpfad gespeichert'+(val?(': '+val):' (Standard).');
+      addLog('Anleitungs-Standardpfad geändert', val||MANUAL_BASE_DEFAULT);
+      setTimeout(()=>{ m.textContent=''; m.style.color=''; }, 2500);
+    });
+    card.querySelector('#manual-base-reset').addEventListener('click', ()=>{
+      setManualBase('');
+      document.getElementById('manual-base-input').value=MANUAL_BASE_DEFAULT;
+      const m=document.getElementById('manual-base-msg');
+      m.style.color='#1c7a2e'; m.textContent='Auf Standard zurückgesetzt: '+MANUAL_BASE_DEFAULT;
+      addLog('Anleitungs-Standardpfad zurückgesetzt', MANUAL_BASE_DEFAULT);
+      setTimeout(()=>{ m.textContent=''; m.style.color=''; }, 2500);
+    });
+  }
+  document.getElementById('manual-base-input').value=getManualBase();
+}
 
 /* Panels einmalig ins Einstellungs-Modal verschieben */
 (function relocatePanels(){
@@ -3484,21 +3541,6 @@ function nextCode(area){
 }
 
 /* Lagerplatz-Dropdown im Formular füllen (abhängig vom Bereich) */
-/* Lagerplatz-Optionen als HTML für ein beliebiges Formular (z. B. Bearbeiten).
-   Der aktuell gespeicherte Wert bleibt immer wählbar, auch wenn er (noch)
-   nicht in der Lagerplatz-Liste des Bereichs steht. */
-function lagerOptionsHtml(area, selected){
-  const arr=(loadLists().lager[area])||[];
-  let html='';
-  if(selected && arr.indexOf(selected)===-1){
-    html+='<option value="'+escapeHtml(selected)+'" selected>'+escapeHtml(selected)+' (aktuell)</option>';
-  }
-  if(!arr.length && !selected){
-    html+='<option value="">(keine – im Zahnrad → Daten anlegen)</option>';
-  }
-  arr.forEach(v=>{ html+='<option value="'+escapeHtml(v)+'"'+(v===selected?' selected':'')+'>'+escapeHtml(v)+'</option>'; });
-  return html;
-}
 function fillLagerOptions(){
   const areaEl=document.getElementById('d-area'); const sel=document.getElementById('d-lager');
   if(!areaEl || !sel) return;
@@ -3658,7 +3700,7 @@ function renderDevices(){
       '<div class="actions-row" style="margin:12px 0 6px;">'+
         '<button class="btn btn-primary btn-sm dev-exam">DGUV V3 prüfen</button>'+
         '<button class="btn btn-outline btn-sm dev-qr">QR-Code</button>'+
-        (isAdmin?'<button class="btn btn-outline btn-sm dev-edit">✏️ Bearbeiten</button>':'')+
+        '<button class="btn btn-outline btn-sm dev-manual">📄 Betriebsanleitung</button>'+
       '</div>'+
       '<div class="cover-box">'+
         (d.cover ? '<img class="cover-prev" src="'+d.cover+'">' : '')+
@@ -3675,6 +3717,12 @@ function renderDevices(){
       (d.location?('<div class="kv"><b>Bemerkung:</b> '+escapeHtml(d.location)+'</div>'):'')+
       '<div class="kv"><b>Art:</b> '+escapeHtml(d.type)+'</div>'+
       '<div class="kv"><b>Intervall:</b> '+d.intervalMonths+' Monate</div>'+
+      '<div class="kv"><b>Betriebsanleitung:</b> '+escapeHtml(resolveManualUrl(d))+(d.manualUrl?' <span class="muted">(manuell)</span>':' <span class="muted">(automatisch)</span>')+'</div>'+
+      '<label style="margin-top:6px;">Anleitung – Dateiname oder Link überschreiben (optional)</label>'+
+      '<input class="manual-url" autocomplete="off" placeholder="leer = automatisch aus Kennung" value="'+escapeHtml(d.manualUrl||'')+'">'+
+      '<div class="actions-row" style="margin:8px 0;">'+
+        '<button class="btn btn-outline btn-sm manual-save">Anleitung-Pfad speichern</button>'+
+      '</div>'+
       '<div class="kv"><b>Letzte Prüfung:</b> '+(s.last?formatDay(s.last):'—')+'</div>'+
       '<div class="kv"><b>Nächste Fälligkeit:</b> '+(s.due?formatDay(s.due):'—')+'</div>'+
       '<p style="margin:14px 0 6px; font-weight:700;">Prüfung erfassen</p>'+
@@ -3689,26 +3737,6 @@ function renderDevices(){
         (tests.length ? '<select class="hist-select"></select><div class="hist-detail" style="margin-top:10px;"></div>'
                       : '<p class="muted">Noch keine Prüfung erfasst.</p>')+
       '</div>'+
-      (isAdmin?(
-        '<div class="edit-box hidden" style="margin-top:14px; padding-top:12px; border-top:1px solid var(--soft);">'+
-          '<p style="font-weight:700; margin:0 0 6px;">Gerät bearbeiten</p>'+
-          '<label>Bezeichnung</label><input class="e-name" autocomplete="off">'+
-          '<label>Inventar-/Kennnummer</label><input class="e-inv" autocapitalize="characters" autocomplete="off">'+
-          '<label>Bereich</label><select class="e-area">'+
-            '<option value="BR">Büro (BR)</option><option value="WK">Fertigung (WK)</option></select>'+
-          '<label>Lagerplatz</label><select class="e-lager"></select>'+
-          '<label>Standort / Bemerkung (optional)</label><input class="e-loc" autocomplete="off">'+
-          '<label>Art</label><select class="e-type">'+
-            '<option value="ortsveränderlich">ortsveränderlich</option>'+
-            '<option value="ortsfest">ortsfest</option></select>'+
-          '<label>Prüfintervall (Monate)</label><input class="e-interval" type="number" min="1" step="1" inputmode="numeric">'+
-          '<div class="kv" style="margin-top:8px; color:var(--gray);">Kennung <b>'+escapeHtml(d.code||'—')+'</b> bleibt unverändert, damit vorhandene QR-Codes gültig bleiben.</div>'+
-          '<div class="actions-row" style="margin-top:10px;">'+
-            '<button class="btn btn-primary btn-sm e-save">Änderungen speichern</button>'+
-            '<button class="btn btn-outline btn-sm e-cancel">Abbrechen</button>'+
-          '</div>'+
-        '</div>'
-      ):'')+
       (isAdmin?'<button class="btn btn-danger btn-sm t-del" style="margin-top:14px;">Gerät löschen</button>':'');
     card.appendChild(body);
 
@@ -3735,6 +3763,18 @@ function renderDevices(){
 
     body.querySelector('.dev-exam').addEventListener('click', ()=> startExam(d.id));
     body.querySelector('.dev-qr').addEventListener('click', ()=> showQR(d));
+    body.querySelector('.dev-manual').addEventListener('click', ()=>{
+      const url=resolveManualUrl(d);
+      addLog('Betriebsanleitung geöffnet', d.name+' ('+(d.code||d.inv||'—')+') · '+url);
+      openExternalPdf(url);
+    });
+    body.querySelector('.manual-save').addEventListener('click', ()=>{
+      const val=body.querySelector('.manual-url').value.trim();
+      const all=loadDevices(); const t=all.find(x=>x.id===d.id); if(!t) return;
+      t.manualUrl=val; saveDevices(all);
+      addLog('Anleitungs-Pfad geändert', d.name+' ('+(d.code||d.inv||'—')+') · '+(val||'automatisch'));
+      renderDevices(); openDevice(d.id);
+    });
 
     const coverFile=body.querySelector('.cover-file');
     body.querySelector('.cover-add').addEventListener('click', ()=> coverFile.click());
@@ -3774,47 +3814,6 @@ function renderDevices(){
         all.splice(i,1); saveDevices(all);
         addLog('Gerät gelöscht', d.name+' ('+(d.inv||'—')+')');
         renderDevices(); renderDashboard();
-      });
-
-      // ---- Gerät bearbeiten (Eingabefehler korrigieren) ----
-      const editBox=body.querySelector('.edit-box');
-      const eName=body.querySelector('.e-name'),   eInv=body.querySelector('.e-inv'),
-            eArea=body.querySelector('.e-area'),    eLager=body.querySelector('.e-lager'),
-            eLoc=body.querySelector('.e-loc'),      eType=body.querySelector('.e-type'),
-            eInt=body.querySelector('.e-interval');
-      function fillEdit(){
-        eName.value=d.name||'';
-        eInv.value=d.inv||'';
-        eArea.value=(d.area==='WK'?'WK':'BR');
-        eLager.innerHTML=lagerOptionsHtml(eArea.value, d.lager||'');
-        eLoc.value=d.location||'';
-        eType.value=(d.type==='ortsfest'?'ortsfest':'ortsveränderlich');
-        eInt.value=d.intervalMonths||12;
-      }
-      body.querySelector('.dev-edit').addEventListener('click', ()=>{
-        if(editBox.classList.contains('hidden')){ fillEdit(); editBox.classList.remove('hidden'); editBox.scrollIntoView({behavior:'smooth', block:'nearest'}); }
-        else editBox.classList.add('hidden');
-      });
-      // Bei Bereichswechsel die passenden Lagerplätze anbieten
-      eArea.addEventListener('change', ()=>{ eLager.innerHTML=lagerOptionsHtml(eArea.value, ''); });
-      body.querySelector('.e-cancel').addEventListener('click', ()=> editBox.classList.add('hidden'));
-      body.querySelector('.e-save').addEventListener('click', ()=>{
-        const name=eName.value.trim();
-        const inv=eInv.value.trim();
-        const area=(eArea.value==='WK'?'WK':'BR');
-        const lager=eLager.value;
-        const loc=eLoc.value.trim();
-        const type=(eType.value==='ortsfest'?'ortsfest':'ortsveränderlich');
-        const interval=parseInt(eInt.value,10);
-        if(!name){ alert('Bitte eine Bezeichnung angeben.'); return; }
-        if(!interval || interval<1){ alert('Bitte ein gültiges Prüfintervall (Monate) angeben.'); return; }
-        const all=loadDevices(); const t=all.find(x=>x.id===d.id);
-        if(!t){ alert('Gerät nicht gefunden – bitte Ansicht neu laden.'); return; }
-        const before=(t.name||'—')+' ('+(t.inv||'—')+')';
-        t.name=name; t.inv=inv; t.area=area; t.lager=lager; t.location=loc; t.type=type; t.intervalMonths=interval;
-        if(!saveDevicesChecked(all)){ alert('Speicher voll: Änderungen konnten nicht gespeichert werden. Bitte sichern und alte Fotos entfernen.'); return; }
-        addLog('Gerät bearbeitet', before+' → '+name+' ('+(inv||'—')+')');
-        renderDevices(); renderDashboard(); openDevice(d.id);
       });
     }
 
@@ -3856,6 +3855,7 @@ document.getElementById('d-go').addEventListener('click', ()=>{
   const area=document.getElementById('d-area').value;
   const lager=document.getElementById('d-lager').value;
   const loc=document.getElementById('d-loc').value.trim();
+  const manual=document.getElementById('d-manual').value.trim();
   const type=document.getElementById('d-type').value;
   const interval=parseInt(document.getElementById('d-interval').value,10);
   const msg=document.getElementById('d-msg');
@@ -3863,11 +3863,12 @@ document.getElementById('d-go').addEventListener('click', ()=>{
   if(!interval || interval<1){ msg.style.color=''; msg.textContent='Bitte ein gültiges Intervall (Monate) angeben.'; return; }
   const code=nextCode(area);
   const all=loadDevices();
-  all.push({ id:uid(), code, area, lager, inv, name, location:loc, type, intervalMonths:interval, cover:newDeviceCover, created:new Date().toISOString(), tests:[] });
+  all.push({ id:uid(), code, area, lager, inv, name, location:loc, type, intervalMonths:interval, manualUrl:manual, cover:newDeviceCover, created:new Date().toISOString(), tests:[] });
   saveDevices(all);
   addLog('Gerät angelegt', code+' · '+name+(inv?(' ('+inv+')'):'')+' · '+areaLabel(area)+(lager?(' / '+lager):'')+' · Intervall '+interval+' Mon.');
   document.getElementById('d-inv').value=''; document.getElementById('d-name').value='';
   document.getElementById('d-loc').value='';
+  document.getElementById('d-manual').value='';
   newDeviceCover=null; document.getElementById('d-cover-prev').innerHTML='';
   msg.style.color='#1c7a2e'; msg.textContent='Gerät "'+name+'" gespeichert (Kennung '+code+').';
   renderDevices(); renderDashboard();
@@ -4162,25 +4163,16 @@ function mergeUsers(data){
   if(!data || !Array.isArray(data.users)) return {error:'Keine Benutzerliste in der Datei gefunden.'};
   const cur=loadUsers();
   const byName={}; cur.forEach(u=> byName[u.username.toLowerCase()]=u);
-  let added=0, updated=0, skipped=0;
-  const addedNames=[], updatedNames=[];
+  let added=0, updated=0;
   data.users.forEach(u=>{
-    if(!u || !u.username || !u.salt || !u.hash || !u.role){ skipped++; return; }
+    if(!u || !u.username || !u.salt || !u.hash || !u.role) return;
     const key=u.username.toLowerCase(); const ex=byName[key];
-    if(ex){ ex.salt=u.salt; ex.hash=u.hash; ex.role=u.role; updated++; updatedNames.push(u.username); }
-    else { const nu={ username:u.username, salt:u.salt, hash:u.hash, role:u.role, created:u.created||new Date().toISOString() }; cur.push(nu); byName[key]=nu; added++; addedNames.push(u.username); }
+    if(ex){ ex.salt=u.salt; ex.hash=u.hash; ex.role=u.role; updated++; }
+    else { const nu={ username:u.username, salt:u.salt, hash:u.hash, role:u.role, created:u.created||new Date().toISOString() }; cur.push(nu); byName[key]=nu; added++; }
   });
   if(!cur.some(u=>u.role==='admin')) return {error:'Es muss mindestens ein Administrator vorhanden bleiben.'};
   saveUsers(cur);
-  // Persistenz prüfen: erneut laden und gegen die erwarteten Konten abgleichen.
-  // So fällt ein stiller Speicherfehler (z. B. privater Modus / voller Speicher) sofort auf.
-  let persistErr=false;
-  try{
-    const check=loadUsers(); const have={}; check.forEach(u=> have[u.username.toLowerCase()]=u);
-    const expect=addedNames.concat(updatedNames);
-    persistErr = (!persistent) || expect.some(n=> !have[n.toLowerCase()]);
-  }catch(e){ persistErr=true; }
-  return {added, updated, skipped, addedNames, updatedNames, persistErr};
+  return {added, updated};
 }
 
 document.getElementById('users-export').addEventListener('click', ()=>{
@@ -4201,12 +4193,9 @@ document.getElementById('users-import-file').addEventListener('change', e=>{
     const res=mergeUsers(data);
     e.target.value='';
     if(res.error){ alert('Import abgebrochen: '+res.error); return; }
-    addLog('Benutzer eingelesen', 'hinzugefügt: '+res.added+', aktualisiert: '+res.updated+(res.skipped?(', übersprungen: '+res.skipped):''));
+    addLog('Benutzer eingelesen', 'hinzugefügt: '+res.added+', aktualisiert: '+res.updated);
     renderUsers();
-    let msg='Benutzer zusammengeführt.\nHinzugefügt: '+res.added+'\nAktualisiert: '+res.updated;
-    if(res.skipped) msg+='\n\nAchtung: '+res.skipped+' Eintrag/Einträge konnten nicht gelesen werden (fehlende Felder Salt/Hash/Rolle – vermutlich Datei aus einer älteren Version).';
-    if(res.persistErr) msg+='\n\nWARNUNG: Die Daten konnten NICHT dauerhaft gespeichert werden (z. B. privater Browser-Modus oder voller Speicher). Die Konten stehen nach dem Neuladen nicht zur Verfügung.';
-    alert(msg);
+    alert('Benutzer zusammengeführt.\nHinzugefügt: '+res.added+'\nAktualisiert: '+res.updated);
   };
   reader.readAsText(file);
 });
@@ -4221,18 +4210,9 @@ function handlePreloginImport(file, fromSetup){
     if(!Array.isArray(data.users)){ alert('Keine Benutzerliste in der Datei gefunden.'); return; }
     const res=mergeUsers(data);
     if(res.error){ alert('Import abgebrochen: '+res.error); return; }
-    addLog('Benutzer eingelesen (vor Anmeldung)', 'hinzugefügt: '+res.added+', aktualisiert: '+res.updated+(res.skipped?(', übersprungen: '+res.skipped):''));
-    let msg='Benutzer importiert.\nHinzugefügt: '+res.added+'\nAktualisiert: '+res.updated;
-    const names=res.addedNames.concat(res.updatedNames);
-    if(names.length) msg+='\nKonten: '+names.join(', ');
-    if(res.skipped) msg+='\n\nAchtung: '+res.skipped+' Eintrag/Einträge konnten nicht gelesen werden (fehlende Felder Salt/Hash/Rolle – vermutlich Datei aus einer älteren Version).';
-    if(res.persistErr){
-      msg+='\n\nWARNUNG: Die Daten konnten NICHT dauerhaft gespeichert werden (z. B. privater Browser-Modus oder voller Gerätespeicher). Deshalb schlägt die Anmeldung fehl. Bitte den privaten Modus verlassen bzw. Speicher freigeben und erneut importieren.';
-    } else {
-      msg+='\n\nBitte jetzt mit Benutzername und Passwort vom Ursprungsgerät anmelden.';
-    }
-    alert(msg);
-    if(!res.persistErr) show('view-login'); // es gibt nun Benutzer -> Login zeigen
+    addLog('Benutzer eingelesen (vor Anmeldung)', 'hinzugefügt: '+res.added+', aktualisiert: '+res.updated);
+    alert('Benutzer importiert.\nHinzugefügt: '+res.added+'\nAktualisiert: '+res.updated+'\n\nBitte jetzt mit deinem Benutzernamen und Passwort anmelden.');
+    show('view-login'); // es gibt nun Benutzer -> Login zeigen
   };
   reader.readAsText(file);
 }
@@ -4256,9 +4236,8 @@ function openExternalPdf(filename){
   try{
     var url = filename;
     if(location.protocol !== 'file:'){ url += (filename.indexOf('?')>=0?'&':'?') + 't=' + Date.now(); }
-    var a = document.createElement('a');
-    a.href = url; a.target = '_blank'; a.rel = 'noopener';
-    document.body.appendChild(a); a.click(); a.remove();
+    var win = window.open(url, '_blank', 'noopener');
+    if(!win){ location.href = url; }
   }catch(err){ alert('Die PDF-Datei konnte nicht geöffnet werden: '+err.message); }
 }
 function openManual(){ openExternalPdf('./Benutzeranleitung.pdf'); }
